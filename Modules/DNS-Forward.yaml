@@ -108,12 +108,6 @@ dns:
       match: hotspot.cslwifi.com
       value: syslib
   - domain_wildcard:
-      match: networking.apple
-      value: 苹果DNS
-  - domain_wildcard:
-      match: '*.icloud.com'
-      value: 苹果DNS
-  - domain_wildcard:
       match: '*.alibaba.cn'
       value: 阿里DNS
   - domain_wildcard:
