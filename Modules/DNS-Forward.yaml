@@ -16,10 +16,6 @@ dns:
     - https://doh.360.cn/dns-query
     字节DNS:
     - 180.184.1.1
-    默认DNS:
-    - quic://dns.alidns.com
-    - https://doh.pub/dns-query
-
   forward:
   - domain_wildcard:
       match: '*.id.ui.direct'
@@ -564,10 +560,6 @@ dns:
   - domain_keyword:
       match: linudrive
       value: 阿里DNS
-  - domain_wildcard:
-      match: '*'
-      value: 默认DNS
-
   hosts:
     dns.google:
     - 8.8.8.8
