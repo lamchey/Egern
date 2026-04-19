@@ -555,6 +555,10 @@ dns:
       match: linudrive
       value: 阿里DNS
   hosts:
+    iosapps.itunes.apple.com:
+    - iosapps.itunes.apple.com.download.ks-cdn.com #App Store加速 金山云CDN
+    #- hls.itunes.apple.com.mwcname.com #App Store加速 网宿科技CDN
+    #- iosapps.itunes.apple.com.m.alikunlun.net #App Store加速 阿里昆仑CDN
     dns.google:
     - 8.8.8.8
     - 8.8.4.4
