@@ -16,40 +16,11 @@ dns:
     - https://doh.360.cn/dns-query
     字节DNS:
     - 180.184.1.1
+    默认DNS:
+    - quic://dns.alidns.com
+    - https://doh.pub/dns-query
+
   forward:
-  - domain_wildcard:
-      match: blog.google
-      value: 119.29.29.29
-  - domain_wildcard:
-      match: googletraveladservices.com
-      value: 119.29.29.29
-  - domain_wildcard:
-      match: dl.google.com
-      value: 119.29.29.29
-  - domain_wildcard:
-      match: dl.l.google.com
-      value: 119.29.29.29
-  - domain_wildcard:
-      match: clientservices.googleapis.com
-      value: 119.29.29.29
-  - domain_wildcard:
-      match: update.googleapis.com
-      value: 119.29.29.29
-  - domain_wildcard:
-      match: translate.googleapis.com
-      value: 119.29.29.29
-  - domain_wildcard:
-      match: fonts.googleapis.com
-      value: 119.29.29.29
-  - domain_wildcard:
-      match: fonts.gstatic.com
-      value: 119.29.29.29
-  - domain_wildcard:
-      match: stun.l.google.com
-      value: syslib
-  - domain_wildcard:
-      match: stun?.l.google.com
-      value: syslib
   - domain_wildcard:
       match: '*.id.ui.direct'
       value: syslib
@@ -595,7 +566,8 @@ dns:
       value: 阿里DNS
   - domain_wildcard:
       match: '*'
-      value: upstreams
+      value: 默认DNS
+
   hosts:
     dns.google:
     - 8.8.8.8
