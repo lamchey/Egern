@@ -1,5 +1,5 @@
-name: DNS Forward
-description: 1.域名按所属DNS进行分流解析 2.路由器地址使用系统DNS进行解析 3.特殊地址使用规范DNS进行解析 4.修改自@VirgilClyne
+name: DNS enhanced
+description: 1.域名按所属DNS进行分流解析 2.路由器地址使用系统DNS进行解析 3.特殊地址使用规范DNS进行解析 4.DNS功能增强
 author: lamchey
 
 dns:
