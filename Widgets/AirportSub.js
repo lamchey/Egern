@@ -267,7 +267,7 @@ function buildCard(result, colors, ctx) {
     const d = new Date(ts);
     expireText = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} 到期`;
   } else {
-    expireText = "永久有效";
+    expireText = "长期有效";
   }
 
   return {
@@ -313,7 +313,7 @@ function buildCard(result, colors, ctx) {
                 ]
               },
               {
-                type: "stack", direction: "row", flex: 0.8, alignItems: "center",
+                type: "stack", direction: "row", flex: 0.7, alignItems: "center",
                 children: [
                   { type: "spacer" },
                   { type: "text", text: `${Math.round(progressPercent)}%`, font: { size: "caption2", weight: "bold" }, textColor: statusColor }
