@@ -140,6 +140,7 @@ export default async function (ctx) {
         alignItems: "center",
         gap: 6,
         children: [
+          { type: "stack", width: 2 }, 
           { type: "image", src: "sf-symbol:network", width: 12, height: 12, color: colors.accentBlue },
           { type: "text", text: "机场订阅", font: { size: "subheadline", weight: "bold" }, textColor: colors.textPrimary },
           { type: "spacer" },
