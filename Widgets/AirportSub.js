@@ -140,7 +140,7 @@ export default async function (ctx) {
         alignItems: "center",
         gap: 6,
         children: [
-          { type: "stack", width: 1 }, 
+          { type: "stack", width: 2 }, 
           { type: "image", src: "sf-symbol:network", width: 12, height: 12, color: colors.accentBlue },
           { type: "text", text: "机场订阅", font: { size: "subheadline", weight: "bold" }, textColor: colors.textPrimary },
           { type: "spacer" },
@@ -313,7 +313,7 @@ function buildCard(result, colors, ctx) {
                 ]
               },
               {
-                type: "stack", direction: "row", flex: 1.2, alignItems: "center",
+                type: "stack", direction: "row", flex: 0.8, alignItems: "center",
                 children: [
                   { type: "spacer" },
                   { type: "text", text: `${Math.round(progressPercent)}%`, font: { size: "caption2", weight: "bold" }, textColor: statusColor }
@@ -344,16 +344,15 @@ function buildCard(result, colors, ctx) {
               { type: "text", text: `剩${formatBytes(totalBytes - used)}`, font: { size: "caption2", weight: "semibold" }, textColor: colors.accentGreen },
             ]
           : [
-              // 这里的 flex 改为 1.0 防止左侧长字符串被截断
               {
-                type: "stack", direction: "row", flex: 1.0, alignItems: "center",
+                type: "stack", direction: "row", flex: 1.2, alignItems: "center",
                 children: [
                   { type: "text", text: `${usedStr}/${totalStr}`, font: { size: "caption2", weight: "medium" }, textColor: colors.textSecondary, lineLimit: 1 },
                   { type: "spacer" }
                 ]
               },
               {
-                type: "stack", direction: "row", flex: 1, alignItems: "center",
+                type: "stack", direction: "row", flex: 2, alignItems: "center",
                 children: [
                   { type: "spacer" },
                   { type: "text", text: expireText, font: { size: "caption2", weight: "medium" }, textColor: colors.textTertiary, lineLimit: 1 },
@@ -361,7 +360,7 @@ function buildCard(result, colors, ctx) {
                 ]
               },
               {
-                type: "stack", direction: "row", flex: 1, alignItems: "center",
+                type: "stack", direction: "row", flex: 0, alignItems: "center",
                 children: [
                   { type: "spacer" },
                   { type: "text", text: `剩${formatBytes(totalBytes - used)}`, font: { size: "caption2", weight: "semibold" }, textColor: colors.accentGreen, lineLimit: 1 }
