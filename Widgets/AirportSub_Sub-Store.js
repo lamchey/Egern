@@ -20,7 +20,7 @@
  *    TIMEOUT_MS=8000                            # 请求超时毫秒数（默认 8000）
  *    FLOW_USER_AGENT=clash.meta/v1.19.23        # 流量查询 User-Agent
  *    INSECURE_TLS=false                         # 允许不安全的 HTTPS（默认 false）
- *    NO_RESET=1,3                               # 指定第几个订阅不显示重置倒数（从1开始）
+ *    NO_RESET=1,3                                 # 指定第几个订阅不显示重置倒数（从1开始）
  *
  * 2️⃣ 显示数量说明：
  *    - 小尺寸 (systemSmall)：自动显示 2 条
@@ -329,7 +329,7 @@ function decorateItem(sub, flow, cfg, index) {
   }
 
   return {
-    name,
+    name: String(flow.planName || name), // 优先套餐名，没有用订阅名
     error: null,
     used,
     totalBytes: total,
