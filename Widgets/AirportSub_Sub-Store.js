@@ -20,6 +20,7 @@
  *    TIMEOUT_MS=8000                            # 请求超时毫秒数（默认 8000）
  *    FLOW_USER_AGENT=clash.meta/v1.19.23        # 流量查询 User-Agent
  *    INSECURE_TLS=false                         # 允许不安全的 HTTPS（默认 false）
+ *    NO_RESET=机场A,机场B                         # 标记为一次性流量包，不显示重置倒数
  *
  * 2️⃣ 显示数量说明：
  *    - 小尺寸 (systemSmall)：自动显示 2 条
@@ -27,7 +28,8 @@
  *    - 大尺寸 (systemLarge)：自动显示 5 条
  *
  * 3️⃣ 注意事项：
- *    - 重置日期由 Sub-Store 自动从订阅响应头解析，无需手动配置
+ *    - 重置日优先级：API 返回天数 > 响应头 reset_day > 用到期日推算（到期日的日作为每月重置日）
+ *    - 一次性流量包（无按月重置）请配置 NO_RESET，避免错误显示重置倒数
  *    - 小组件每 1 小时自动刷新一次
  */
 
@@ -113,6 +115,7 @@ function getConfig(ctx) {
     baseUrls,
     names: parseList(env.SUB_NAMES || env.SUB_NAME || ""),
     matchContains: bool(env.MATCH_CONTAINS, false),
+    noResetNames: parseList(env.NO_RESET || ""),
     timeout: clampInt(env.TIMEOUT_MS, 8000, 1000, 60000),
     flowUserAgent: env.FLOW_USER_AGENT || "clash.meta/v1.19.23",
     insecureTls: bool(env.INSECURE_TLS, false),
@@ -205,13 +208,13 @@ async function fetchFlowItem(ctx, cfg, sub) {
       cfg
     );
     const flow = normalizeFlow(unwrap(json));
-    if (hasUsableFlow(flow)) return decorateItem(sub, flow);
+    if (hasUsableFlow(flow)) return decorateItem(sub, flow, cfg);
   } catch (_) {}
 
   // 降级：直连订阅链接
   try {
     const flow = await fetchDirectFlow(ctx, cfg, sub);
-    if (hasUsableFlow(flow)) return decorateItem(sub, flow);
+    if (hasUsableFlow(flow)) return decorateItem(sub, flow, cfg);
   } catch (_) {}
 
   return { name, error: "无法获取流量信息" };
@@ -292,7 +295,7 @@ function parseFlowString(raw) {
 /**
  * 将 Sub-Store 流量数据转换为 buildCard 所需的结构
  */
-function decorateItem(sub, flow) {
+function decorateItem(sub, flow, cfg) {
   const total = finiteOr(flow.total, 0);
   const upload = finiteOr(flow.upload, 0);
   const download = finiteOr(flow.download, 0);
@@ -305,18 +308,28 @@ function decorateItem(sub, flow) {
     expire = flow.expires < 1e12 ? flow.expires * 1000 : flow.expires;
   }
 
-  // 重置日（天数）
-  // 优先用 Sub-Store API 返回的 remainingDays（直接是天数）
-  // 降级时用响应头里的 reset_day（每月几号），换算成距今天数
+  // 重置日（天数）优先级：
+  //   1. Sub-Store API 直接给的 remainingDays
+  //   2. 订阅响应头 reset_day（每月几号）换算
+  //   3. 用到期日的「日」作为每月重置日推算
+  //   4. NO_RESET 名单内的订阅不显示
+  const name = String(sub.name || "订阅");
+  const isNoReset = cfg && Array.isArray(cfg.noResetNames) && cfg.noResetNames.includes(name);
   let resetDays = null;
-  if (Number.isFinite(flow.remainingDays) && flow.remainingDays >= 0) {
-    resetDays = Math.max(0, Math.floor(flow.remainingDays));
-  } else if (Number.isFinite(flow.resetDay) && flow.resetDay >= 1 && flow.resetDay <= 31) {
-    resetDays = getDaysUntilReset(flow.resetDay);
+
+  if (!isNoReset) {
+    if (Number.isFinite(flow.remainingDays) && flow.remainingDays >= 0) {
+      resetDays = Math.max(0, Math.floor(flow.remainingDays));
+    } else if (Number.isFinite(flow.resetDay) && flow.resetDay >= 1 && flow.resetDay <= 31) {
+      resetDays = getDaysUntilReset(flow.resetDay);
+    } else if (expire) {
+      // 两者都拿不到时：用到期日的「日」推算每月重置
+      resetDays = getDaysUntilReset(new Date(expire).getDate());
+    }
   }
 
   return {
-    name: String(sub.name || "订阅"),
+    name,
     error: null,
     used,
     totalBytes: total,
