@@ -329,7 +329,7 @@ function decorateItem(sub, flow, cfg, index) {
   }
 
   return {
-    name: String(flow.planName || name), // 优先套餐名，没有用订阅名
+    name: String(sub.displayName || flow.planName || name), // 优先显示名称，其次套餐名，最后订阅名
     error: null,
     used,
     totalBytes: total,
