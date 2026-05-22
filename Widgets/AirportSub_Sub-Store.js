@@ -12,15 +12,15 @@
  * 📝 使用说明
  * 1️⃣ 添加环境变量（在 Egern 中进入小组件"编辑环境变量"）：
  *
- *    SUB_STORE_URL=http://192.168.1.100:3000   # Sub-Store 地址（必填）
+ *    SUB_STORE_URL=http://192.168.1.100:3000    # Sub-Store 地址（必填）
  *
- *    SUB_NAMES=机场A,机场B                      # 指定显示的订阅名称（可选，不填则显示全部）
+ *    SUB_NAMES=机场A,机场B                       # 指定显示的订阅名称（可选，不填则显示全部）
  *    MATCH_CONTAINS=true                        # 订阅名称模糊匹配（默认 false 精确匹配）
  *
  *    TIMEOUT_MS=8000                            # 请求超时毫秒数（默认 8000）
  *    FLOW_USER_AGENT=clash.meta/v1.19.23        # 流量查询 User-Agent
  *    INSECURE_TLS=false                         # 允许不安全的 HTTPS（默认 false）
- *    NO_RESET=1,3                                 # 指定第几个订阅不显示重置倒数（从1开始）
+ *    NO_RESET=1,3                               # 指定第几个订阅不显示重置倒数（从1开始）
  *
  * 2️⃣ 显示数量说明：
  *    - 小尺寸 (systemSmall)：自动显示 2 条
@@ -191,7 +191,7 @@ function isRemoteSub(sub) {
 /**
  * 查单个订阅的流量：
  *   1. Sub-Store API（/api/sub/flow/:name）
- *   2. 降级：直连订阅链接读响应头（保留原有逻辑）
+ *   2. 降级：直连订阅链接读响应头
  */
 async function fetchFlowItem(ctx, cfg, sub, index) {
   const name = String(sub?.name || "未命名订阅");
@@ -221,7 +221,7 @@ async function fetchFlowItem(ctx, cfg, sub, index) {
 }
 
 /**
- * 直连订阅链接读 subscription-userinfo 响应头（原有逻辑）
+ * 直连订阅链接读 subscription-userinfo 响应头
  */
 async function fetchDirectFlow(ctx, cfg, sub) {
   const rawUrl = firstHttpUrl(sub.url || sub.subUserinfo || "");
@@ -359,7 +359,7 @@ function writeCache(ctx, cfg, items) {
   } catch (_) {}
 }
 
-// ─── UI 组件（布局完全保留原版）────────────────────────────────────────────────
+// ─── UI 组件 ────────────────────────────────────────────────
 
 function makeColors() {
   return {
