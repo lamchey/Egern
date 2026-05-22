@@ -256,7 +256,10 @@ function normalizeFlow(raw) {
     upload: toNum(usage.upload ?? d.upload),
     download: toNum(usage.download ?? d.download),
     expires: toNum(d.expires ?? d.expire),
-    remainingDays: toNum(d.remainingDays ?? d.reset_day),
+    // remainingDays：Sub-Store API 返回的"距下次重置天数"，直接可用
+    remainingDays: toNum(d.remainingDays),
+    // resetDay：订阅响应头里的"每月几号重置"，需要换算成天数
+    resetDay: toNum(d.reset_day),
     planName: String(d.planName || d.plan_name || ""),
   };
 }
@@ -303,9 +306,13 @@ function decorateItem(sub, flow) {
   }
 
   // 重置日（天数）
+  // 优先用 Sub-Store API 返回的 remainingDays（直接是天数）
+  // 降级时用响应头里的 reset_day（每月几号），换算成距今天数
   let resetDays = null;
   if (Number.isFinite(flow.remainingDays) && flow.remainingDays >= 0) {
     resetDays = Math.max(0, Math.floor(flow.remainingDays));
+  } else if (Number.isFinite(flow.resetDay) && flow.resetDay >= 1 && flow.resetDay <= 31) {
+    resetDays = getDaysUntilReset(flow.resetDay);
   }
 
   return {
@@ -698,6 +705,23 @@ function shortError(err) {
 function preview(s, len) {
   s = String(s ?? "").replace(/\s+/g, " ").trim();
   return s.length > len ? s.slice(0, len - 1) + "…" : s;
+}
+
+/**
+ * 计算每月固定重置日距今天数（来自直连响应头 reset_day 字段）
+ */
+function getDaysUntilReset(resetDay) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const currentMonthMax = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const safeDay = Math.min(resetDay, currentMonthMax);
+  let target = new Date(now.getFullYear(), now.getMonth(), safeDay);
+  if (today >= target) {
+    const nextMonth = now.getMonth() + 1;
+    const nextMonthMax = new Date(now.getFullYear(), nextMonth + 1, 0).getDate();
+    target = new Date(now.getFullYear(), nextMonth, Math.min(resetDay, nextMonthMax));
+  }
+  return Math.ceil((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 }
 
 function formatBytes(bytes) {
