@@ -20,7 +20,7 @@
  *    TIMEOUT_MS=8000                            # 请求超时毫秒数（默认 8000）
  *    FLOW_USER_AGENT=clash.meta/v1.19.23        # 流量查询 User-Agent
  *    INSECURE_TLS=false                         # 允许不安全的 HTTPS（默认 false）
- *    NO_RESET=机场A,机场B                         # 标记为一次性流量包，不显示重置倒数
+ *    NO_RESET=1,3                               # 指定第几个订阅不显示重置倒数（从1开始）
  *
  * 2️⃣ 显示数量说明：
  *    - 小尺寸 (systemSmall)：自动显示 2 条
@@ -29,7 +29,7 @@
  *
  * 3️⃣ 注意事项：
  *    - 重置日优先级：API 返回天数 > 响应头 reset_day > 用到期日推算（到期日的日作为每月重置日）
- *    - 一次性流量包（无按月重置）请配置 NO_RESET，避免错误显示重置倒数
+ *    - 一次性流量包（无按月重置）请配置 NO_RESET=1,3，按序号指定（从1开始）
  *    - 小组件每 1 小时自动刷新一次
  */
 
@@ -115,7 +115,7 @@ function getConfig(ctx) {
     baseUrls,
     names: parseList(env.SUB_NAMES || env.SUB_NAME || ""),
     matchContains: bool(env.MATCH_CONTAINS, false),
-    noResetNames: parseList(env.NO_RESET || ""),
+    noResetIndexes: parseList(env.NO_RESET || "").map(Number).filter((n) => Number.isFinite(n) && n >= 1),
     timeout: clampInt(env.TIMEOUT_MS, 8000, 1000, 60000),
     flowUserAgent: env.FLOW_USER_AGENT || "clash.meta/v1.19.23",
     insecureTls: bool(env.INSECURE_TLS, false),
@@ -134,7 +134,7 @@ async function loadResults(ctx, cfg) {
   const items = new Array(selected.length);
   await Promise.all(
     selected.map(async (sub, i) => {
-      items[i] = await fetchFlowItem(ctx, cfg, sub);
+      items[i] = await fetchFlowItem(ctx, cfg, sub, i + 1);
     })
   );
   return items;
@@ -193,7 +193,7 @@ function isRemoteSub(sub) {
  *   1. Sub-Store API（/api/sub/flow/:name）
  *   2. 降级：直连订阅链接读响应头（保留原有逻辑）
  */
-async function fetchFlowItem(ctx, cfg, sub) {
+async function fetchFlowItem(ctx, cfg, sub, index) {
   const name = String(sub?.name || "未命名订阅");
 
   if (sub.missing) {
@@ -208,13 +208,13 @@ async function fetchFlowItem(ctx, cfg, sub) {
       cfg
     );
     const flow = normalizeFlow(unwrap(json));
-    if (hasUsableFlow(flow)) return decorateItem(sub, flow, cfg);
+    if (hasUsableFlow(flow)) return decorateItem(sub, flow, cfg, index);
   } catch (_) {}
 
   // 降级：直连订阅链接
   try {
     const flow = await fetchDirectFlow(ctx, cfg, sub);
-    if (hasUsableFlow(flow)) return decorateItem(sub, flow, cfg);
+    if (hasUsableFlow(flow)) return decorateItem(sub, flow, cfg, index);
   } catch (_) {}
 
   return { name, error: "无法获取流量信息" };
@@ -295,7 +295,7 @@ function parseFlowString(raw) {
 /**
  * 将 Sub-Store 流量数据转换为 buildCard 所需的结构
  */
-function decorateItem(sub, flow, cfg) {
+function decorateItem(sub, flow, cfg, index) {
   const total = finiteOr(flow.total, 0);
   const upload = finiteOr(flow.upload, 0);
   const download = finiteOr(flow.download, 0);
@@ -314,7 +314,7 @@ function decorateItem(sub, flow, cfg) {
   //   3. 用到期日的「日」作为每月重置日推算
   //   4. NO_RESET 名单内的订阅不显示
   const name = String(sub.name || "订阅");
-  const isNoReset = cfg && Array.isArray(cfg.noResetNames) && cfg.noResetNames.includes(name);
+  const isNoReset = cfg && Array.isArray(cfg.noResetIndexes) && cfg.noResetIndexes.includes(index);
   let resetDays = null;
 
   if (!isNoReset) {
