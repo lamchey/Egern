@@ -1,32 +1,28 @@
 name: 网上国网
-desc: 余量查询
+description: 余量查询
 author: 𝐎𝐍𝐙𝟑𝐕
 icon: https://is1-ssl.mzstatic.com/image/thumb/Purple116/v4/83/d8/8a/83d88a92-5a4d-7a2f-118c-80d795e7a9f6/AppIcon-0-0-1x_U007emarketing-0-5-0-0-sRGB-85-220.png/144x144.png
 
-arguments:
- - key: sgcc_enable
-   type: switch
-   defaultValue: true
-   label: 重写开关
-   description: 是否开启接口重写
- - key: timeout
-   type: input
-   defaultValue: "60"
-   label: 脚本运行最大时间
-   description: 脚本运行最大时间
+env_schema:
+  SGCC_ENABLE:
+    name: 重写开关
+    description: 是否开启接口重写
+    options:
+      - "true"
+      - "false"
+  TIMEOUT:
+    name: 脚本运行最大时间
+    description: 脚本运行最大时间（秒）
+    default_value: "60"
 
-script_providers:
- - name: 网上国网接口重写
-   url: https://raw.githubusercontent.com/Yuheng0101/X/main/Tasks/95598/95598.js
-
-http_script_filters:
- - name: 网上国网接口重写
-   pattern: ^https?:\/\/api\.wsgw-rewrite\.com\/electricity\/bill\/all
-   script: 网上国网接口重写
-   requires_body: true
-   timeout: $timeout
-   enabled: $sgcc_enable
+scriptings:
+  - http_request:
+      name: 网上国网接口重写
+      match: "^https?://api\\.wsgw-rewrite\\.com/electricity/bill/all"
+      script_url: https://raw.githubusercontent.com/Yuheng0101/X/main/Tasks/95598/95598.js
+      body_required: true
+      timeout: 60
 
 mitm:
- hostnames:
-   - api.wsgw-rewrite.com
+  hostnames:
+    - api.wsgw-rewrite.com
