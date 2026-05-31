@@ -1,0 +1,20 @@
+name: 网上国网
+desc: 接口重写
+author: 𝐎𝐍𝐙𝟑𝐕
+icon: https://is1-ssl.mzstatic.com/image/thumb/Purple116/v4/83/d8/8a/83d88a92-5a4d-7a2f-118c-80d795e7a9f6/AppIcon-0-0-1x_U007emarketing-0-5-0-0-sRGB-85-220.png/144x144.png
+
+script_providers:
+ - name: 网上国网接口重写
+   url: https://raw.githubusercontent.com/Yuheng0101/X/main/Tasks/95598/95598.js
+
+http_script_filters:
+ - name: 网上国网接口重写
+   pattern: ^https?:\/\/api\.wsgw-rewrite\.com\/electricity\/bill\/all
+   script: 网上国网接口重写
+   requires_body: true
+   timeout: $timeout
+   enabled: $sgcc_enable
+
+mitm:
+ hostnames:
+   - api.wsgw-rewrite.com
