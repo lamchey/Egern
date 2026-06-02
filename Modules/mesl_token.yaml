@@ -26,7 +26,7 @@ mitm:
 
 scriptings:
   - http_response:
-      name: MESl Token 捕获
+      name: MESL Token 捕获
       # match Token的路径
       match: ".*/api/v1/user/checkLogin$"
       script_url: https://raw.githubusercontent.com/lamchey/Egern/refs/heads/main/Modules/airport_sync.js
