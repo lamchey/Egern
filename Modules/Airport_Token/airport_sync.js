@@ -1,205 +1,131 @@
 /**
- * airport_sync.js
- *
- * 功能：
- * 1. 仅监听 TARGET_URL
- * 2. 仅提取 Authorization 请求头
- * 3. Token 未变化则不上传
- * 4. 10秒并发锁防止重复写入
- * 5. 支持多个机场共存
+ * airport_sync.js —— Egern 机场 Token 同步脚本
  */
 
 export default async function (ctx) {
 
-  const TARGET_URL = ctx.env.TARGET_URL || '';
+    // ─── 从环境变量读取配置 ────────────────────────────────────────
+    const GIST_ID    = ctx.env.GIST_ID    || '';
+    const GIST_TOKEN = ctx.env.GIST_TOKEN || '';
+    const GIST_FILE  = ctx.env.GIST_FILE  || 'airport_token.json';
+    const AIRPORT_ID = ctx.env.AIRPORT_ID || 'airport';
 
-  const GIST_ID = ctx.env.GIST_ID || '';
-  const GIST_TOKEN = ctx.env.GIST_TOKEN || '';
-  const GIST_FILE = ctx.env.GIST_FILE || 'airport_token.json';
-  const AIRPORT_ID = ctx.env.AIRPORT_ID || 'airport';
-
-  if (!TARGET_URL) {
-    console.log('[Airport Sync] TARGET_URL 未配置');
-    return;
-  }
-
-  const requestUrl = ctx.request?.url || '';
-
-  // 仅监听指定接口
-  if (!requestUrl.startsWith(TARGET_URL)) {
-    return;
-  }
-
-  console.log(`[Airport Sync] 捕获目标请求: ${requestUrl}`);
-
-  if (!GIST_ID || !GIST_TOKEN) {
-    console.log('[Airport Sync] GIST_ID 或 GIST_TOKEN 未配置');
-    return;
-  }
-
-  // 获取 Authorization
-  const headers = ctx.request?.headers || {};
-
-  const authHeaderKey = Object.keys(headers).find(
-    k => k.toLowerCase() === 'authorization'
-  );
-
-  if (!authHeaderKey) {
-    console.log('[Airport Sync] 未发现 Authorization');
-    return;
-  }
-
-  const authData = String(headers[authHeaderKey]).trim();
-
-  if (!authData) {
-    console.log('[Airport Sync] Authorization 为空');
-    return;
-  }
-
-  const cacheKey = `airport_token_${AIRPORT_ID}`;
-
-  const localCache = ctx.storage.getJSON(cacheKey);
-
-  // Token没变化直接跳过
-  if (
-    localCache &&
-    localCache.auth_data === authData
-  ) {
-    console.log('[Airport Sync] Token 未变化');
-    return;
-  }
-
-  // 10秒并发锁
-  const lockKey = `sync_lock_${AIRPORT_ID}`;
-
-  const lastLockTime = ctx.storage.get(lockKey);
-
-  if (
-    lastLockTime &&
-    Date.now() - Number(lastLockTime) < 10000
-  ) {
-    console.log('[Airport Sync] 并发锁生效，跳过');
-    return;
-  }
-
-  ctx.storage.set(
-    lockKey,
-    String(Date.now())
-  );
-
-  const nowUnix = Math.floor(Date.now() / 1000);
-
-  console.log('[Airport Sync] 开始同步 Gist');
-
-  let existing = {};
-
-  try {
-
-    const getResp = await ctx.http.get(
-      `https://api.github.com/gists/${GIST_ID}`,
-      {
-        headers: {
-          Authorization: `Bearer ${GIST_TOKEN}`,
-          Accept: 'application/vnd.github+json',
-          'User-Agent': 'AirportSync/2.0'
-        },
-        timeout: 15000
-      }
-    );
-
-    if (getResp.status === 200) {
-
-      const gistData = await getResp.json();
-
-      const content =
-        gistData?.files?.[GIST_FILE]?.content;
-
-      if (content) {
-        try {
-          existing = JSON.parse(content);
-        } catch {
-          existing = {};
-        }
-      }
+    // ─── 基础校验 ─────────────────────────────────────────────────
+    if (!GIST_ID || !GIST_TOKEN) {
+        ctx.notify({
+            title: '机场 Token 同步',
+            body:  '⚠️ 未配置 Gist ID 或 GitHub Token，请在模块设置中填写',
+        });
+        return;
     }
 
-  } catch (e) {
-
-    console.log(
-      '[Airport Sync] Gist读取失败: ' +
-      e.message
+    // ─── 从请求头提取 Authorization ───────────────────────────────
+    // checkLogin 是已登录状态下的心跳接口，其请求头携带的就是当前有效 Token
+    const reqHeaders   = ctx.request?.headers || {};
+    const authHeaderKey = Object.keys(reqHeaders).find(
+        k => k.toLowerCase() === 'authorization'
     );
+    const authData = authHeaderKey ? String(reqHeaders[authHeaderKey]).trim() : null;
 
-  }
+    if (!authData) {
+        console.log('[Airport Sync] 请求头中未找到 Authorization，跳过');
+        return;
+    }
 
-  existing[AIRPORT_ID] = {
-    auth_data: authData,
-    updated_at: nowUnix,
-    source: 'egern',
-    login_url: TARGET_URL
-  };
+    // ─── 本地去重：Token 未变化则不写入 Gist ──────────────────────
+    // 避免每次 checkLogin 心跳都触发 Gist 写入（一般每隔几十秒一次）
+    const localCache = ctx.storage.getJSON(`airport_token_${AIRPORT_ID}`);
+    if (localCache?.auth_data === authData) {
+        console.log('[Airport Sync] Token 未变化，跳过本次同步');
+        return;
+    }
 
-  try {
+    console.log('[Airport Sync] 检测到新 Token，正在同步到 Gist...');
 
-    const patchResp = await ctx.http.patch(
-      `https://api.github.com/gists/${GIST_ID}`,
-      {
-        headers: {
-          Authorization: `Bearer ${GIST_TOKEN}`,
-          'Content-Type': 'application/json',
-          Accept: 'application/vnd.github+json',
-          'User-Agent': 'AirportSync/2.0'
-        },
-        body: {
-          files: {
-            [GIST_FILE]: {
-              content: JSON.stringify(
-                existing,
-                null,
-                2
-              )
+    const nowUnix = Math.floor(Date.now() / 1000);
+
+    // ─── 读取 Gist 现有内容 ────────────────────────────────────────
+    // 多机场共用一个文件，读取后合并当前机场条目再写回
+    let existing = {};
+    try {
+        const getResp = await ctx.http.get(
+            `https://api.github.com/gists/${GIST_ID}`,
+            {
+                headers: {
+                    'Authorization': `Bearer ${GIST_TOKEN}`,
+                    'User-Agent':    'AirportSync/1.0',
+                    'Accept':        'application/vnd.github+json',
+                },
+                timeout: 15000,
             }
-          }
-        },
-        timeout: 15000
-      }
-    );
+        );
 
-    if (patchResp.status === 200) {
-
-      ctx.storage.setJSON(
-        cacheKey,
-        existing[AIRPORT_ID]
-      );
-
-      console.log(
-        `[Airport Sync] ${AIRPORT_ID} 同步成功`
-      );
-
-      ctx.notify({
-        title: '机场Token同步成功',
-        body: `${AIRPORT_ID} 已更新`,
-        sound: false
-      });
-
-    } else {
-
-      const err =
-        await patchResp.text();
-
-      console.log(
-        `[Airport Sync] 上传失败 ${patchResp.status}: ${err}`
-      );
-
+        if (getResp.status === 200) {
+            const gistData    = await getResp.json();
+            const fileContent = gistData?.files?.[GIST_FILE]?.content;
+            if (fileContent) {
+                try {
+                    existing = JSON.parse(fileContent);
+                } catch {
+                    // Gist 文件内容损坏，覆盖写入
+                    existing = {};
+                }
+            }
+        }
+    } catch (e) {
+        console.log('[Airport Sync] Gist 读取异常，继续覆盖写入：' + e.message);
     }
 
-  } catch (e) {
+    // ─── 更新当前机场条目 ──────────────────────────────────────────
+    existing[AIRPORT_ID] = {
+        auth_data:  authData,
+        updated_at: nowUnix,
+        source:     'egern',
+        login_url:  ctx.request?.url ?? '',
+    };
 
-    console.log(
-      '[Airport Sync] 上传异常: ' +
-      e.message
-    );
+    // ─── 写回 Gist ────────────────────────────────────────────────
+    try {
+        const patchResp = await ctx.http.patch(
+            `https://api.github.com/gists/${GIST_ID}`,
+            {
+                headers: {
+                    'Authorization': `Bearer ${GIST_TOKEN}`,
+                    'Content-Type':  'application/json',
+                    'User-Agent':    'AirportSync/1.0',
+                    'Accept':        'application/vnd.github+json',
+                },
+                body: {
+                    files: {
+                        [GIST_FILE]: {
+                            content: JSON.stringify(existing, null, 2),
+                        },
+                    },
+                },
+                timeout: 15000,
+            }
+        );
 
-  }
+        if (patchResp.status === 200) {
+            console.log(`[Airport Sync] ${AIRPORT_ID} Token 同步成功 ✅`);
 
+            // 写入本地缓存，供下次去重比对
+            ctx.storage.setJSON(`airport_token_${AIRPORT_ID}`, existing[AIRPORT_ID]);
+
+            ctx.notify({
+                title: '机场 Token 同步成功',
+                body:  `${AIRPORT_ID} 的 Token 已更新到 Gist`,
+                sound: false,
+            });
+        } else {
+            const errBody = await patchResp.text();
+            console.log(`[Airport Sync] Gist 写入失败 ${patchResp.status}：${errBody}`);
+            ctx.notify({
+                title: '机场 Token 同步失败',
+                body:  `HTTP ${patchResp.status}，请检查 GitHub Token 权限`,
+            });
+        }
+    } catch (e) {
+        console.log('[Airport Sync] Gist 写入异常：' + e.message);
+    }
 }
