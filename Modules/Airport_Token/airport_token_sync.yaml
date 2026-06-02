@@ -1,44 +1,52 @@
 name: 机场 Token 自动同步
-description: 拦截机场登录响应，自动将 Token 写入 GitHub Gist，供油猴脚本读取以实现跨设备自动续期。
+description: 拦截机场面板返回的 Token，自动写入 GitHub Gist，供油猴脚本读取以实现跨设备自动续期。
 author: lamchey
 icon: square.and.arrow.up.fill
 
-# 通过 env_schema 声明敏感配置，Egern 会在模块设置页生成对应输入框
-# 用户在 UI 里填写，不需要将密钥硬编码在文件里
 env_schema:
+  PROFILE_URL:
+    name: 机场个人主页 URL
+    description: 个人主页地址，例如 https://panel.meslcloud.com/#/profile。用于限定目标机场与日志展示，hash 路由不会直接参与抓包匹配。
+    default_value: https://panel.meslcloud.com/#/profile
+
+  TOKEN_API_MATCH:
+    name: Token 接口匹配
+    description: 实际返回 Token 的接口 URL 正则或关键字，例如 api/v1/user|getSubscribe|passport/auth/login
+    default_value: '(?:api/v1/user|getSubscribe|passport/auth/login|user/info|profile)'
+
   GIST_ID:
     name: Gist ID
     description: GitHub Gist 的 ID（URL 末尾那串字符）
+
   GIST_TOKEN:
     name: GitHub Token
     description: 用于读写 Gist 的 Fine-grained Token（需要 Gist Read & Write 权限）
+
   GIST_FILE:
     name: Gist 文件名
     description: Gist 中存储 Token 的 JSON 文件名，油猴脚本需与此保持一致
     default_value: airport_token.json
+
   AIRPORT_ID:
     name: 机场标识
-    description: 当前机场的唯一标识，用于在 Gist 文件中区分多个机场，可任意命名（如 mesl、abc）
-    default_value: mesl
+    description: 当前机场的唯一标识，用于在 Gist 文件中区分多个机场，可任意命名（如 ddd、abc）
+    default_value: 
+
   TOKEN_PATHS:
     name: Token 字段路径
     description: 登录响应中 Token 的提取路径，多个路径用英文逗号分隔，按顺序尝试。如 data.auth_data,data.token,token
     default_value: data.auth_data,data.token,token,data.access_token
 
-# MITM：需要对机场登录接口所在域名开启 MITM 才能读取响应体
-# 此处使用通配符，实际使用时建议填写具体机场域名以缩小范围
 mitm:
   hostnames:
     - "*.meslcloud.com"
-    # 如需同步其他机场，继续追加对应域名，例如：
-    # - "*.other-airport.com"
 
 scriptings:
   - http_response:
       name: 机场登录 Token 捕获
-      # 匹配常见机场面板的个人主页接口路径
-      match: ".*/#/profile$"
-      script_url: https://raw.githubusercontent.com/lamchey/Egern/refs/heads/main/Modules/Airport_Token/airport_sync.js
+      # 这里写实际请求 URL 的正则；不要写 #/profile，因为 hash 不会出现在 HTTP 请求里
+      match: '^https://panel\.meslcloud\.com/.*$'
+      script_url: https://raw.githubusercontent.com/lamchey/Egern/main/Modules/Airport_Token/airport_sync.js
       body_required: true
       max_size: 524288
       timeout: 30
