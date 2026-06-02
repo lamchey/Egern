@@ -4,7 +4,7 @@
  * 作用：
  * 1. 优先从请求头 (Request Headers) 提取 Authorization Token
  * 2. 兜底从响应体 (Response Body) 中按路径提取 Token
- * 3. 自动写入 GitHub Gist
+ * 3. 引入本地缓存比对与 10s 并发锁，彻底解决 GitHub Gist HTTP 409 冲突问题
  */
 
 export default async function (ctx) {
@@ -30,8 +30,6 @@ export default async function (ctx) {
 
   // ========= 基础日志 =========
   console.log(`[Airport Sync] method=${requestMethod} url=${requestUrl}`);
-  console.log(`[Airport Sync] profile=${PROFILE_URL}`);
-  console.log(`[Airport Sync] token_api_match=${TOKEN_API_MATCH}`);
 
   // ========= 只处理目标机场 =========
   if (profileHost && requestHost && profileHost !== requestHost) {
@@ -57,16 +55,15 @@ export default async function (ctx) {
   let authData = null;
   let matchedPath = null;
 
-  // 1. 优先法：从请求头 (Request Headers) 中提取 Authorization (完美匹配 checkLogin 场景)
+  // 1. 优先法：从请求头 (Request Headers) 中提取 Authorization
   const reqHeaders = ctx.request?.headers || {};
   const authHeaderKey = Object.keys(reqHeaders).find(k => k.toLowerCase() === 'authorization');
   if (authHeaderKey && reqHeaders[authHeaderKey]) {
     authData = String(reqHeaders[authHeaderKey]).trim();
     matchedPath = `request.headers.${authHeaderKey}`;
-    console.log(`[Airport Sync] ✨ 成功从请求头 [${authHeaderKey}] 中捕获 Token`);
   }
 
-  // 2. 兜底法：如果请求头没有，再尝试从响应体 (Response Body) JSON 中提取 (匹配刚登录场景)
+  // 2. 兜底法：从响应体 (Response Body) JSON 中提取
   if (!authData) {
     let body;
     try {
@@ -75,16 +72,37 @@ export default async function (ctx) {
       authData = extracted.token;
       matchedPath = extracted.matchedPath;
     } catch (e) {
-      console.log('[Airport Sync] 无法从响应体提取 Token (非 JSON 或解析失败)，且请求头无 Authorization');
       return;
     }
   }
 
-  // 如果两种方法都完蛋了，才退出
   if (!authData) {
     console.log('[Airport Sync] 未能从请求头或响应体中找到任何有效 Token');
     return;
   }
+
+  // ========= 智能节流与并发锁 (核心防 409 逻辑) =========
+  const localCache = ctx.storage.getJSON(`airport_token_${AIRPORT_ID}`);
+  const nowUnix = Math.floor(Date.now() / 1000);
+
+  // 锁判定 1：相同 Token 去重过滤。如果 Token 未变，且距离上次同步不足 30 分钟，直接拦截
+  if (localCache && localCache.auth_data === authData) {
+    const elapsed = nowUnix - (localCache.updated_at || 0);
+    if (elapsed < 1800) { 
+      console.log(`[Airport Sync] 🔄 Token 未改变，且距离上次同步仅过去 ${elapsed} 秒，跳过上传。`);
+      return;
+    }
+  }
+
+  // 锁判定 2：严格时间并发锁。防止多个不同接口同时返回时，引发 Gist 异步写入冲突
+  const lastLockTime = ctx.storage.get(`sync_lock_${AIRPORT_ID}`);
+  if (lastLockTime && (Date.now() - Number(lastLockTime) < 10000)) { 
+    console.log(`[Airport Sync] ⚠️ 检测到高频并发请求，为防止 Gist 409 冲突，本次同步已静默跳过。`);
+    return;
+  }
+  
+  // 满足同步条件，立刻占线加锁
+  ctx.storage.set(`sync_lock_${AIRPORT_ID}`, String(Date.now()));
 
   console.log(`[Airport Sync] Token 确定（来源：${matchedPath}），正在同步到 Gist...`);
 
@@ -107,22 +125,19 @@ export default async function (ctx) {
         try {
           existing = JSON.parse(fileContent);
         } catch (parseErr) {
-          console.log('[Airport Sync] Gist 文件内容不是合法 JSON，将覆盖写入：' + (parseErr?.message || parseErr));
+          console.log('[Airport Sync] Gist 文件内容不是合法 JSON，将覆盖写入');
           existing = {};
         }
       }
-    } else {
-      console.log(`[Airport Sync] Gist 读取返回 ${getResp.status}，将直接覆盖写入`);
     }
   } catch (e) {
-    console.log('[Airport Sync] Gist 读取异常，继续写入：' + (e?.message || e));
+    console.log('[Airport Sync] Gist 读取异常，尝试继续写入：' + e.message);
   }
 
   // ========= 更新当前机场条目 =========
-  const now = Math.floor(Date.now() / 1000);
   existing[AIRPORT_ID] = {
     auth_data: authData,
-    updated_at: now,
+    updated_at: nowUnix,
     source: 'egern',
     profile_url: PROFILE_URL,
     login_url: requestUrl,
@@ -149,7 +164,9 @@ export default async function (ctx) {
 
     if (patchResp.status === 200) {
       console.log(`[Airport Sync] ${AIRPORT_ID} Token 同步成功 ✅`);
+      // 写入本地持久化缓存，供下次去重比对
       ctx.storage.setJSON(`airport_token_${AIRPORT_ID}`, existing[AIRPORT_ID]);
+      
       ctx.notify({
         title: '机场 Token 同步成功',
         body: `${AIRPORT_ID} 的登录 Token 已更新到 Gist`,
@@ -158,80 +175,37 @@ export default async function (ctx) {
     } else {
       const errBody = await patchResp.text();
       console.log(`[Airport Sync] Gist 写入失败，状态码：${patchResp.status}，响应：${errBody}`);
-      ctx.notify({
-        title: '机场 Token 同步失败',
-        body: `HTTP ${patchResp.status}，请检查 GitHub Token 权限`,
-      });
     }
   } catch (e) {
-    console.log('[Airport Sync] Gist 写入异常：' + (e?.message || e));
-    ctx.notify({
-      title: '机场 Token 同步异常',
-      body: e?.message || String(e),
-    });
+    console.log('[Airport Sync] Gist 写入异常：' + e.message);
   }
-
-  // 不修改响应体，透传给 App
 }
 
-/**
- * 安全获取 URL 主机名
- */
 function safeGetHost(urlStr) {
-  try {
-    return new URL(urlStr).hostname || '';
-  } catch {
-    return '';
-  }
+  try { return new URL(urlStr).hostname || ''; } catch { return ''; }
 }
 
-/**
- * 安全创建正则
- */
 function safeRegExp(pattern, flags = 'i') {
-  try {
-    return new RegExp(pattern, flags);
-  } catch (e) {
-    console.log('[Airport Sync] TOKEN_API_MATCH 正则无效：' + (e?.message || e));
-    return null;
-  }
+  try { return new RegExp(pattern, flags); } catch { return null; }
 }
 
-/**
- * 按路径数组从对象中安全取值
- */
 function getByPath(obj, path) {
   return path.reduce((cur, key) => (cur != null ? cur[key] : null), obj);
 }
 
-/**
- * 依次尝试多个路径提取 Token
- */
 function extractToken(body, paths) {
   for (const path of paths) {
     const val = getByPath(body, path);
-
     if (typeof val === 'string' && val.length > 10) {
-      return {
-        token: val,
-        matchedPath: path.join('.'),
-      };
+      return { token: val, matchedPath: path.join('.') };
     }
-
     if (val && typeof val === 'object') {
       for (const key of ['token', 'auth_data', 'access_token']) {
         if (typeof val[key] === 'string' && val[key].length > 10) {
-          return {
-            token: val[key],
-            matchedPath: `${path.join('.')}.${key}`,
-          };
+          return { token: val[key], matchedPath: `${path.join('.')}.${key}` };
         }
       }
     }
   }
-
-  return {
-    token: null,
-    matchedPath: null,
-  };
+  return { token: null, matchedPath: null };
 }
