@@ -11,21 +11,16 @@ env_schema:
 
   GIST_ID:
     name: Gist ID
-    description: GitHub Gist 的 ID
+    description: GitHub Gist 的 ID（URL 末尾那串字符）
 
   GIST_TOKEN:
     name: GitHub Token
-    description: 具有 Gist Read/Write 权限的 Fine-grained Token
+    description: 用于读写 Gist 的 Fine-grained Token（需要 Gist Read & Write 权限）
 
   GIST_FILE:
     name: Gist 文件名
-    description: 存储机场 Token 的 JSON 文件名
+    description: Gist 中存储 Token 的 JSON 文件名，油猴脚本需与此保持一致
     default_value: airport_token.json
-
-  AIRPORT_ID:
-    name: 机场标识
-    description: 当前机场唯一标识，例如 airport1、airport1
-    default_value:
 
 mitm:
   hostnames:
