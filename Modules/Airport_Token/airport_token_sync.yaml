@@ -4,15 +4,10 @@ author: lamchey
 icon: square.and.arrow.up.fill
 
 env_schema:
-  PROFILE_URL:
-    name: 机场个人主页 URL
-    description: 个人主页地址，例如 https://panel.meslcloud.com/#/profile。用于限定目标机场与日志展示，hash 路由不会直接参与抓包匹配。
-    default_value: https://panel.meslcloud.com/#/profile
-
   TARGET_URL:
     name: Token接口URL
     description: 用于获取 Authorization 的接口地址
-    default_value :https://panel.meslcloud.com/api/v1/user/checkLogin
+    default_value: https://panel.meslcloud.com/api/v1/user/checkLogin
 
   GIST_ID:
     name: Gist ID
