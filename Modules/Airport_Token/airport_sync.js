@@ -1,10 +1,12 @@
 /**
- * airport_sync_checklogin.js
+ * airport_sync.js
  *
+ * 修正点
  * - 仅匹配 /api/v1/user/checkLogin
  * - 只从请求头提取 Authorization
  * - 并发锁延长到 60s
  * - 写入 Gist 前读取文件 sha 并在 PATCH 时带上，遇到 409 做指数退避重试（最多 3 次）
+ * - 修复重试边界、确保锁在 finally 中释放、显式 JSON.stringify 请求体、增强健壮性检查
  */
 
 export default async function (ctx) {
@@ -21,8 +23,8 @@ export default async function (ctx) {
   const LOCK_TTL_MS = Number(ctx.env.LOCK_TTL_MS || 60000); // 60s
   const SAME_TOKEN_SKIP_SECONDS = Number(ctx.env.SAME_TOKEN_SKIP_SECONDS || 1800); // 30min
 
-  const requestUrl = ctx.request?.url || '';
-  const requestMethod = ctx.request?.method || '';
+  const requestUrl = (ctx.request && ctx.request.url) ? ctx.request.url : '';
+  const requestMethod = (ctx.request && ctx.request.method) ? ctx.request.method : '';
   const profileHost = safeGetHost(PROFILE_URL);
   const requestHost = safeGetHost(requestUrl);
 
@@ -47,8 +49,8 @@ export default async function (ctx) {
     return;
   }
 
-  // 只从请求头取 Authorization
-  const reqHeaders = ctx.request?.headers || {};
+  // 只从请求头取 Authorization（健壮性检查）
+  const reqHeaders = (ctx.request && ctx.request.headers) ? ctx.request.headers : {};
   const authHeaderKey = Object.keys(reqHeaders).find(k => k.toLowerCase() === 'authorization');
   if (!authHeaderKey || !reqHeaders[authHeaderKey]) {
     console.log('[Airport Sync] 未在请求头中找到 Authorization，跳过。');
@@ -61,7 +63,13 @@ export default async function (ctx) {
   }
 
   // 本地缓存去重与并发锁
-  const localCache = ctx.storage.getJSON(`airport_token_${AIRPORT_ID}`);
+  let localCache = null;
+  try {
+    localCache = ctx.storage.getJSON ? ctx.storage.getJSON(`airport_token_${AIRPORT_ID}`) : null;
+  } catch (e) {
+    console.log('[Airport Sync] 读取本地缓存异常：' + (e && e.message ? e.message : e));
+    localCache = null;
+  }
   const nowUnix = Math.floor(Date.now() / 1000);
 
   if (localCache && localCache.auth_data === authData) {
@@ -72,14 +80,20 @@ export default async function (ctx) {
     }
   }
 
-  const lastLockTime = Number(ctx.storage.get(`sync_lock_${AIRPORT_ID}`) || 0);
+  const lastLockRaw = ctx.storage.get ? ctx.storage.get(`sync_lock_${AIRPORT_ID}`) : null;
+  const lastLockTime = lastLockRaw ? Number(lastLockRaw) : 0;
   if (lastLockTime && (Date.now() - lastLockTime < LOCK_TTL_MS)) {
     console.log('[Airport Sync] ⚠️ 检测到高频并发请求，为防止 Gist 409 冲突，本次同步已静默跳过。');
     return;
   }
 
-  // 占锁
-  ctx.storage.set(`sync_lock_${AIRPORT_ID}`, String(Date.now()));
+  // 占锁（写入当前时间戳）
+  try {
+    ctx.storage.set(`sync_lock_${AIRPORT_ID}`, String(Date.now()));
+  } catch (e) {
+    console.log('[Airport Sync] 设置锁失败：' + (e && e.message ? e.message : e));
+    // 继续也可以，但可能增加冲突风险
+  }
 
   console.log('[Airport Sync] Authorization 已捕获，准备同步到 Gist...');
 
@@ -96,12 +110,13 @@ export default async function (ctx) {
       timeout: 15000,
     });
 
-    if (getResp.status === 200) {
+    if (getResp && getResp.status === 200) {
       const gistData = await getResp.json();
-      const fileObj = gistData?.files?.[GIST_FILE];
+      const fileObj = gistData && gistData.files ? gistData.files[GIST_FILE] : null;
       if (fileObj) {
         fileSha = fileObj.sha || null;
-        const fileContent = fileObj.content;
+        // content 可能不存在或被截断，先校验再解析
+        const fileContent = typeof fileObj.content === 'string' ? fileObj.content : null;
         if (fileContent) {
           try {
             existing = JSON.parse(fileContent);
@@ -109,12 +124,14 @@ export default async function (ctx) {
             console.log('[Airport Sync] Gist 文件内容不是合法 JSON，将覆盖写入');
             existing = {};
           }
+        } else {
+          existing = {};
         }
       } else {
         existing = {};
       }
     } else {
-      console.log(`[Airport Sync] 读取 Gist 返回状态 ${getResp.status}，继续尝试写入`);
+      console.log(`[Airport Sync] 读取 Gist 返回状态 ${getResp ? getResp.status : 'unknown'}，继续尝试写入`);
     }
   } catch (e) {
     console.log('[Airport Sync] Gist 读取异常，继续尝试写入：' + (e && e.message ? e.message : e));
@@ -133,93 +150,111 @@ export default async function (ctx) {
 
   // ========= 写回 Gist 带重试与指数退避 =========
   const maxRetries = 3;
-  let attempt = 0;
   let success = false;
   let lastError = null;
 
-  while (attempt <= maxRetries && !success) {
-    attempt++;
-    try {
-      // 构造 body，若有 fileSha 则带上以降低冲突
-      const filesBody = {};
-      filesBody[GIST_FILE] = { content: newContent };
-      if (fileSha) filesBody[GIST_FILE].sha = fileSha;
+  try {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // 构造 body，若有 fileSha 则带上以降低冲突
+        const filesBody = {};
+        filesBody[GIST_FILE] = { content: newContent };
+        if (fileSha) filesBody[GIST_FILE].sha = fileSha;
 
-      const patchResp = await ctx.http.patch(`https://api.github.com/gists/${GIST_ID}`, {
-        headers: {
-          'Authorization': `Bearer ${GIST_TOKEN}`,
-          'Content-Type': 'application/json',
-          'User-Agent': 'AirportSync/1.0',
-          'Accept': 'application/vnd.github+json',
-        },
-        body: {
-          files: filesBody,
-        },
-        timeout: 15000,
-      });
-
-      if (patchResp.status === 200) {
-        console.log(`[Airport Sync] ${AIRPORT_ID} Token 同步成功 ✅`);
-        ctx.storage.setJSON(`airport_token_${AIRPORT_ID}`, existing[AIRPORT_ID]);
-        ctx.notify({
-          title: '机场 Token 同步成功',
-          body: `${AIRPORT_ID} 的登录 Token 已更新到 Gist`,
-          sound: false,
+        const patchResp = await ctx.http.patch(`https://api.github.com/gists/${GIST_ID}`, {
+          headers: {
+            'Authorization': `Bearer ${GIST_TOKEN}`,
+            'Content-Type': 'application/json',
+            'User-Agent': 'AirportSync/1.0',
+            'Accept': 'application/vnd.github+json',
+          },
+          body: JSON.stringify({ files: filesBody }),
+          timeout: 15000,
         });
-        success = true;
-        break;
-      } else if (patchResp.status === 409) {
-        lastError = `409 Conflict`;
-        console.log(`[Airport Sync] Gist 写入冲突 409，第 ${attempt} 次尝试`);
-        // 若冲突，先重新 GET 最新文件以更新 fileSha，再重试
-        try {
-          const refreshResp = await ctx.http.get(`https://api.github.com/gists/${GIST_ID}`, {
-            headers: {
-              'Authorization': `Bearer ${GIST_TOKEN}`,
-              'User-Agent': 'AirportSync/1.0',
-              'Accept': 'application/vnd.github+json',
-            },
-            timeout: 10000,
+
+        if (patchResp && patchResp.status === 200) {
+          console.log(`[Airport Sync] ${AIRPORT_ID} Token 同步成功 ✅`);
+          try {
+            ctx.storage.setJSON && ctx.storage.setJSON(`airport_token_${AIRPORT_ID}`, existing[AIRPORT_ID]);
+          } catch (e) {
+            console.log('[Airport Sync] 本地缓存写入失败：' + (e && e.message ? e.message : e));
+          }
+          ctx.notify && ctx.notify({
+            title: '机场 Token 同步成功',
+            body: `${AIRPORT_ID} 的登录 Token 已更新到 Gist`,
+            sound: false,
           });
-          if (refreshResp.status === 200) {
-            const refreshed = await refreshResp.json();
-            const refreshedFile = refreshed?.files?.[GIST_FILE];
-            if (refreshedFile) {
-              fileSha = refreshedFile.sha || fileSha;
-              // 如果文件内容发生变化，更新 existing 以避免覆盖他人更新
-              try {
-                const refreshedContent = refreshedFile.content;
+          success = true;
+          break;
+        }
+
+        // 处理冲突 409
+        if (patchResp && patchResp.status === 409) {
+          lastError = '409 Conflict';
+          console.log(`[Airport Sync] Gist 写入冲突 409，第 ${attempt} 次尝试`);
+          // 刷新最新文件并尝试更新 fileSha 与合并判断
+          try {
+            const refreshResp = await ctx.http.get(`https://api.github.com/gists/${GIST_ID}`, {
+              headers: {
+                'Authorization': `Bearer ${GIST_TOKEN}`,
+                'User-Agent': 'AirportSync/1.0',
+                'Accept': 'application/vnd.github+json',
+              },
+              timeout: 10000,
+            });
+            if (refreshResp && refreshResp.status === 200) {
+              const refreshed = await refreshResp.json();
+              const refreshedFile = refreshed && refreshed.files ? refreshed.files[GIST_FILE] : null;
+              if (refreshedFile) {
+                fileSha = refreshedFile.sha || fileSha;
+                const refreshedContent = typeof refreshedFile.content === 'string' ? refreshedFile.content : null;
                 if (refreshedContent) {
-                  const parsed = JSON.parse(refreshedContent);
-                  // 合并策略：保留最新 updated_at 更大的条目
-                  const remoteEntry = parsed?.[AIRPORT_ID];
-                  if (remoteEntry && remoteEntry.updated_at && remoteEntry.updated_at > (existing[AIRPORT_ID].updated_at || 0)) {
-                    console.log('[Airport Sync] 远端 Gist 中该机场条目更新更晚，放弃本次覆盖以避免回退');
-                    // 释放锁并退出
-                    ctx.storage.set(`sync_lock_${AIRPORT_ID}`, String(Date.now()));
-                    return;
+                  try {
+                    const parsed = JSON.parse(refreshedContent);
+                    const remoteEntry = parsed && parsed[AIRPORT_ID];
+                    if (remoteEntry && remoteEntry.updated_at && remoteEntry.updated_at > (existing[AIRPORT_ID].updated_at || 0)) {
+                      console.log('[Airport Sync] 远端 Gist 中该机场条目更新更晚，放弃本次覆盖以避免回退');
+                      // 远端更晚，不覆盖，直接退出重试循环
+                      success = false;
+                      break;
+                    }
+                  } catch (e) {
+                    // 解析失败则继续重试
                   }
                 }
-              } catch (e) {
-                // 解析失败则继续使用本地 existing
               }
             }
+          } catch (e) {
+            console.log('[Airport Sync] 冲突后刷新 Gist 失败：' + (e && e.message ? e.message : e));
           }
-        } catch (e) {
-          console.log('[Airport Sync] 冲突后刷新 Gist 失败：' + (e && e.message ? e.message : e));
+
+          // 指数退避（仅在未放弃的情况下）
+          if (attempt < maxRetries) {
+            const backoff = 500 * Math.pow(2, attempt - 1);
+            await sleep(backoff);
+            continue;
+          } else {
+            break;
+          }
         }
-        // 指数退避
-        if (attempt <= maxRetries) {
+
+        // 其他非 200/409 状态
+        const errBody = patchResp && patchResp.text ? await patchResp.text() : 'no body';
+        lastError = `status ${patchResp ? patchResp.status : 'unknown'} response ${errBody}`;
+        console.log(`[Airport Sync] Gist 写入失败，状态码：${patchResp ? patchResp.status : 'unknown'}，响应：${errBody}`);
+
+        // 对 5xx 做重试
+        if (patchResp && patchResp.status >= 500 && attempt < maxRetries) {
           const backoff = 500 * Math.pow(2, attempt - 1);
           await sleep(backoff);
           continue;
+        } else {
+          break;
         }
-      } else {
-        const errBody = await patchResp.text();
-        lastError = `status ${patchResp.status} response ${errBody}`;
-        console.log(`[Airport Sync] Gist 写入失败，状态码：${patchResp.status}，响应：${errBody}`);
-        // 对于 5xx 可重试，对 4xx 直接放弃
-        if (patchResp.status >= 500 && attempt <= maxRetries) {
+      } catch (e) {
+        lastError = e && e.message ? e.message : e;
+        console.log('[Airport Sync] Gist 写入异常：' + lastError);
+        if (attempt < maxRetries) {
           const backoff = 500 * Math.pow(2, attempt - 1);
           await sleep(backoff);
           continue;
@@ -227,25 +262,23 @@ export default async function (ctx) {
           break;
         }
       }
-    } catch (e) {
-      lastError = e && e.message ? e.message : e;
-      console.log('[Airport Sync] Gist 写入异常：' + lastError);
-      if (attempt <= maxRetries) {
-        const backoff = 500 * Math.pow(2, attempt - 1);
-        await sleep(backoff);
-        continue;
+    }
+  } finally {
+    // 确保释放锁：把锁清空或设置为 0（取决于运行环境是否支持 remove）
+    try {
+      if (ctx.storage.remove) {
+        ctx.storage.remove(`sync_lock_${AIRPORT_ID}`);
       } else {
-        break;
+        ctx.storage.set(`sync_lock_${AIRPORT_ID}`, '0');
       }
+    } catch (e) {
+      console.log('[Airport Sync] 释放锁失败：' + (e && e.message ? e.message : e));
     }
   }
 
   if (!success) {
     console.log(`[Airport Sync] 最终写入失败：${lastError}`);
   }
-
-  // 释放锁（设置为当前时间，下一次会检查 TTL）
-  ctx.storage.set(`sync_lock_${AIRPORT_ID}`, String(Date.now()));
 }
 
 // ======= 辅助函数 =======
