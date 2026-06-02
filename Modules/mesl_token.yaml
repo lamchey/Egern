@@ -1,5 +1,5 @@
 name: MESL Token 自动抓取
-description: 从请求头提取 Token 写入 GitHub Gist
+description: 从请求头提取 Token 写入 GitHub Gist，可选限定触发页面
 author: lamchey
 icon: square.and.arrow.up.fill
 
@@ -18,16 +18,21 @@ env_schema:
     name: 机场标识
     description: 机场的唯一标识
     default_value: mesl
+  TRIGGER_PATH:
+    name: 触发页面路径（可选）
+    description: 填写后：仅当请求的 Referer 包含此路径时才执行同步
+      示例：/#/profile
+      留空：命中 checkLogin 接口即触发，不限来源页面
+    default_value: ""
+
 mitm:
   hostnames:
-    # mesl官网
     - "*.meslcloud.com"
     - "*.meslcloud.org"
 
 scriptings:
   - http_response:
-      name: MESl Token 捕获
-      # match Token的路径
+      name: MESL Token 捕获
       match: ".*/api/v1/user/checkLogin$"
       script_url: https://raw.githubusercontent.com/lamchey/Egern/refs/heads/main/Modules/airport_sync.js
       body_required: false
