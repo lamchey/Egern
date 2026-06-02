@@ -2,13 +2,9 @@
  * airport_sync.js —— Egern 机场 Token 同步脚本
  *
  * 作用：
- * 1. 监听机场面板相关响应
- * 2. 从响应体中提取 Token
- * 3. 写入 GitHub Gist
- *
- * 说明：
- * - PROFILE_URL 仅作为配置项与日志参考
- *   真正是否触发，仍然依赖 TOKEN_API_MATCH 命中实际接口
+ * 1. 优先从请求头 (Request Headers) 提取 Authorization Token
+ * 2. 兜底从响应体 (Response Body) 中按路径提取 Token
+ * 3. 自动写入 GitHub Gist
  */
 
 export default async function (ctx) {
@@ -57,25 +53,40 @@ export default async function (ctx) {
     return;
   }
 
-  // ========= 解析响应体 =========
-  let body;
-  try {
-    body = await ctx.response.json();
-  } catch (e) {
-    console.log('[Airport Sync] 响应体不是 JSON，已跳过：' + (e?.message || e));
-    return;
+  // ========= 智能双模提取 Token =========
+  let authData = null;
+  let matchedPath = null;
+
+  // 1. 优先法：从请求头 (Request Headers) 中提取 Authorization (完美匹配 checkLogin 场景)
+  const reqHeaders = ctx.request?.headers || {};
+  const authHeaderKey = Object.keys(reqHeaders).find(k => k.toLowerCase() === 'authorization');
+  if (authHeaderKey && reqHeaders[authHeaderKey]) {
+    authData = String(reqHeaders[authHeaderKey]).trim();
+    matchedPath = `request.headers.${authHeaderKey}`;
+    console.log(`[Airport Sync] ✨ 成功从请求头 [${authHeaderKey}] 中捕获 Token`);
   }
 
-  // ========= 提取 Token =========
-  const { token: authData, matchedPath } = extractToken(body, TOKEN_PATHS);
-
+  // 2. 兜底法：如果请求头没有，再尝试从响应体 (Response Body) JSON 中提取 (匹配刚登录场景)
   if (!authData) {
-    console.log('[Airport Sync] 未找到 Token，响应顶层字段：' + JSON.stringify(Object.keys(body || {})));
-    console.log('[Airport Sync] 请检查 TOKEN_PATHS 是否与该机场响应结构匹配');
+    let body;
+    try {
+      body = await ctx.response.json();
+      const extracted = extractToken(body, TOKEN_PATHS);
+      authData = extracted.token;
+      matchedPath = extracted.matchedPath;
+    } catch (e) {
+      console.log('[Airport Sync] 无法从响应体提取 Token (非 JSON 或解析失败)，且请求头无 Authorization');
+      return;
+    }
+  }
+
+  // 如果两种方法都完蛋了，才退出
+  if (!authData) {
+    console.log('[Airport Sync] 未能从请求头或响应体中找到任何有效 Token');
     return;
   }
 
-  console.log(`[Airport Sync] Token 提取成功（路径：${matchedPath}），正在同步到 Gist...`);
+  console.log(`[Airport Sync] Token 确定（来源：${matchedPath}），正在同步到 Gist...`);
 
   // ========= 读取已有 Gist 内容 =========
   let existing = {};
