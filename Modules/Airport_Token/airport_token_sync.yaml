@@ -27,7 +27,7 @@ mitm:
 
 scriptings:
   - http_response:
-      name: 机场 checkLogin Token 捕获
+      name: 机场 Token 捕获
       match: ".*/api/v1/user/checkLogin$"
       script_url: https://raw.githubusercontent.com/lamchey/Egern/main/Modules/Airport_Token/airport_sync.js
       body_required: false
