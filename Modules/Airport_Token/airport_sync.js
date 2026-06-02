@@ -1,5 +1,6 @@
 /**
- * airport_sync.js —— Egern 机场 Token 同步脚本
+ * airport_sync.js —— 机场 Token 同步脚本
+ *
  */
 
 export default async function (ctx) {
@@ -20,33 +21,26 @@ export default async function (ctx) {
     }
 
     // ─── 从请求头提取 Authorization ───────────────────────────────
-    // checkLogin 是已登录状态下的心跳接口，其请求头携带的就是当前有效 Token
-    const reqHeaders   = ctx.request?.headers || {};
+    const reqHeaders    = ctx.request?.headers || {};
     const authHeaderKey = Object.keys(reqHeaders).find(
         k => k.toLowerCase() === 'authorization'
     );
-    const authData = authHeaderKey ? String(reqHeaders[authHeaderKey]).trim() : null;
+    const authData = authHeaderKey
+        ? String(reqHeaders[authHeaderKey]).trim()
+        : null;
 
     if (!authData) {
         console.log('[Airport Sync] 请求头中未找到 Authorization，跳过');
         return;
     }
 
-    // ─── 本地去重：Token 未变化则不写入 Gist ──────────────────────
-    // 避免每次 checkLogin 心跳都触发 Gist 写入（一般每隔几十秒一次）
-    const localCache = ctx.storage.getJSON(`airport_token_${AIRPORT_ID}`);
-    if (localCache?.auth_data === authData) {
-        console.log('[Airport Sync] Token 未变化，跳过本次同步');
-        return;
-    }
+    console.log('[Airport Sync] 捕获到 Authorization，准备比对...');
 
-    console.log('[Airport Sync] 检测到新 Token，正在同步到 Gist...');
+    // ─── 读取 Gist 现有内容（作为去重的权威来源）─────────────────
+    // Gist 是状态的唯一真相，本地缓存仅作加速用途，不单独用于去重判断
+    let existing       = {};
+    let gistTokenValue = null;
 
-    const nowUnix = Math.floor(Date.now() / 1000);
-
-    // ─── 读取 Gist 现有内容 ────────────────────────────────────────
-    // 多机场共用一个文件，读取后合并当前机场条目再写回
-    let existing = {};
     try {
         const getResp = await ctx.http.get(
             `https://api.github.com/gists/${GIST_ID}`,
@@ -66,17 +60,35 @@ export default async function (ctx) {
             if (fileContent) {
                 try {
                     existing = JSON.parse(fileContent);
+                    // 读取 Gist 中当前机场已存储的 Token，用于去重
+                    gistTokenValue = existing?.[AIRPORT_ID]?.auth_data ?? null;
                 } catch {
-                    // Gist 文件内容损坏，覆盖写入
+                    console.log('[Airport Sync] Gist 文件内容损坏，将覆盖写入');
                     existing = {};
                 }
             }
+        } else {
+            console.log(`[Airport Sync] Gist 读取返回 ${getResp.status}`);
         }
     } catch (e) {
-        console.log('[Airport Sync] Gist 读取异常，继续覆盖写入：' + e.message);
+        console.log('[Airport Sync] Gist 读取异常：' + e.message);
+        // 读取失败时不跳过，继续尝试写入（宁可重复写也不能漏写）
     }
 
+    // ─── 去重判断：以 Gist 中的值为准 ────────────────────────────
+    // 只有 Gist 中已有相同 Token 时才跳过，本地缓存不参与此判断
+    // 这样即使本地缓存与 Gist 不同步，也能正确写入
+    if (gistTokenValue && gistTokenValue === authData) {
+        console.log('[Airport Sync] Gist 中 Token 未变化，跳过本次同步');
+        // 顺手同步本地缓存，修正可能的不一致
+        ctx.storage.setJSON(`airport_token_${AIRPORT_ID}`, existing[AIRPORT_ID]);
+        return;
+    }
+
+    console.log('[Airport Sync] 检测到新 Token，正在写入 Gist...');
+
     // ─── 更新当前机场条目 ──────────────────────────────────────────
+    const nowUnix = Math.floor(Date.now() / 1000);
     existing[AIRPORT_ID] = {
         auth_data:  authData,
         updated_at: nowUnix,
@@ -109,14 +121,18 @@ export default async function (ctx) {
         if (patchResp.status === 200) {
             console.log(`[Airport Sync] ${AIRPORT_ID} Token 同步成功 ✅`);
 
-            // 写入本地缓存，供下次去重比对
-            ctx.storage.setJSON(`airport_token_${AIRPORT_ID}`, existing[AIRPORT_ID]);
+            // 写入成功后同步本地缓存
+            ctx.storage.setJSON(
+                `airport_token_${AIRPORT_ID}`,
+                existing[AIRPORT_ID]
+            );
 
             ctx.notify({
                 title: '机场 Token 同步成功',
                 body:  `${AIRPORT_ID} 的 Token 已更新到 Gist`,
                 sound: false,
             });
+
         } else {
             const errBody = await patchResp.text();
             console.log(`[Airport Sync] Gist 写入失败 ${patchResp.status}：${errBody}`);
@@ -127,5 +143,9 @@ export default async function (ctx) {
         }
     } catch (e) {
         console.log('[Airport Sync] Gist 写入异常：' + e.message);
+        ctx.notify({
+            title: '机场 Token 同步异常',
+            body:  e.message,
+        });
     }
 }
