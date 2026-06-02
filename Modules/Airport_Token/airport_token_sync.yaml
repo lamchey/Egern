@@ -1,41 +1,31 @@
 name: 机场 Token 自动同步
-description: 拦截机场面板请求头或返回的 Token，自动写入 GitHub Gist，供油猴脚本读取以实现跨设备自动续期。
+description: 拦截机场指定接口中的 Authorization 请求头，自动同步到 GitHub Gist，供油猴脚本跨设备自动续期使用。
 author: lamchey
 icon: square.and.arrow.up.fill
 
 env_schema:
-  PROFILE_URL:
-    name: 机场个人主页 URL
-    description: 个人主页地址，例如 https://panel.meslcloud.com/#/profile。用于限定目标机场与日志展示，hash 路由不会直接参与抓包匹配。
-    default_value: https://panel.meslcloud.com/#/profile
-
-  TOKEN_API_MATCH:
-    name: Token 接口匹配
-    description: 实际返回或携带 Token 的接口 URL 正则或关键字，例如 api/v1/user|getSubscribe|passport/auth/login
-    default_value: '(?:api/v1/user|getSubscribe|passport/auth/login|user/info|profile)'
+  TARGET_URL:
+    name: Token接口URL
+    description: 用于获取 Authorization 的接口地址
+    default_value :https://panel.meslcloud.com/api/v1/user/checkLogin
 
   GIST_ID:
     name: Gist ID
-    description: GitHub Gist 的 ID（URL 末尾那串字符）
+    description: GitHub Gist 的 ID
 
   GIST_TOKEN:
     name: GitHub Token
-    description: 用于读写 Gist 的 Fine-grained Token（需要 Gist Read & Write 权限）
+    description: 具有 Gist Read/Write 权限的 Fine-grained Token
 
   GIST_FILE:
     name: Gist 文件名
-    description: Gist 中存储 Token 的 JSON 文件名，油猴脚本需与此保持一致
+    description: 存储机场 Token 的 JSON 文件名
     default_value: airport_token.json
 
   AIRPORT_ID:
     name: 机场标识
-    description: 当前机场的唯一标识，用于在 Gist 文件中区分多个机场，可任意命名（如 mesl、ddd）
-    default_value: 
-
-  TOKEN_PATHS:
-    name: Token 字段路径
-    description: (兜底用) 登录响应中 Token 的提取路径，多个路径用英文逗号分隔。如 data.auth_data,data.token,token
-    default_value: data.auth_data,data.token,token,data.access_token
+    description: 当前机场唯一标识，例如 airport1、airport1
+    default_value:
 
 mitm:
   hostnames:
