@@ -14,7 +14,7 @@
  *
  *    SUB_STORE_URL=http://192.168.1.100:3000    # Sub-Store 地址（必填）
  *
- *    SUB_NAMES=机场A,机场B                       # 指定显示的订阅名称（可选，不填则显示全部）
+ *    EXCLUDE_SUB_NAMES=机场A,机场B                  # 指定排除的订阅名称（可选，不填则显示全部）
  *    MATCH_CONTAINS=true                        # 订阅名称模糊匹配（默认 false 精确匹配）
  *
  *    TIMEOUT_MS=8000                            # 请求超时毫秒数（默认 8000）
@@ -77,7 +77,7 @@ export default async function (ctx) {
   }
 
   if (!results.length) {
-    return errorWidget(bgGradient, refreshTime, colors, "未找到订阅\nSUB_NAMES 没有匹配到 Sub-Store 里的订阅名称");
+    return errorWidget(bgGradient, refreshTime, colors, "未找到订阅\n所有订阅均被 EXCLUDE_SUB_NAMES 排除，或 Sub-Store 中没有远程订阅");
   }
 
   const isLarge = ctx.widgetFamily === "systemLarge";
@@ -113,7 +113,7 @@ function getConfig(ctx) {
   return {
     baseUrl: baseUrls[0] || "",
     baseUrls,
-    names: parseList(env.SUB_NAMES || env.SUB_NAME || ""),
+    excludeNames: parseList(env.EXCLUDE_SUB_NAMES || env.EXCLUDE_NAME || ""),
     matchContains: bool(env.MATCH_CONTAINS, false),
     noResetIndexes: parseList(env.NO_RESET || "").map(Number).filter((n) => Number.isFinite(n) && n >= 1),
     timeout: clampInt(env.TIMEOUT_MS, 8000, 1000, 60000),
@@ -165,18 +165,18 @@ async function fetchSubscriptions(ctx, cfg) {
   throw lastError || new Error("无法连接 Sub-Store");
 }
 
-/**
- * 按名称筛选订阅
- */
 function selectSubscriptions(subs, cfg) {
-  if (!cfg.names.length) return subs.filter(isRemoteSub);
-  return cfg.names.map((name) => {
-    const wanted = String(name).trim();
-    let found = subs.find((s) => String(s?.name || "") === wanted);
-    if (!found && cfg.matchContains) {
-      found = subs.find((s) => String(s?.name || "").includes(wanted));
-    }
-    return found || { name: wanted, missing: true };
+  const remoteSubs = subs.filter(isRemoteSub);
+
+  if (!cfg.excludeNames.length) return remoteSubs;
+
+  return remoteSubs.filter((sub) => {
+    const subName = String(sub?.name || "");
+    return !cfg.excludeNames.some((excluded) => {
+      const want = String(excluded).trim();
+      if (cfg.matchContains) return subName.includes(want);
+      return subName === want;
+    });
   });
 }
 
@@ -259,9 +259,7 @@ function normalizeFlow(raw) {
     upload: toNum(usage.upload ?? d.upload),
     download: toNum(usage.download ?? d.download),
     expires: toNum(d.expires ?? d.expire),
-    // remainingDays：Sub-Store API 返回的"距下次重置天数"，直接可用
     remainingDays: toNum(d.remainingDays),
-    // resetDay：订阅响应头里的"每月几号重置"，需要换算成天数
     resetDay: toNum(d.reset_day),
     planName: String(d.planName || d.plan_name || ""),
   };
@@ -308,11 +306,6 @@ function decorateItem(sub, flow, cfg, index) {
     expire = flow.expires < 1e12 ? flow.expires * 1000 : flow.expires;
   }
 
-  // 重置日（天数）优先级：
-  //   1. Sub-Store API 直接给的 remainingDays
-  //   2. 订阅响应头 reset_day（每月几号）换算
-  //   3. 用到期日的「日」作为每月重置日推算
-  //   4. NO_RESET 名单内的订阅不显示
   const name = String(sub.name || "订阅");
   const isNoReset = cfg && Array.isArray(cfg.noResetIndexes) && cfg.noResetIndexes.includes(index);
   let resetDays = null;
@@ -323,19 +316,18 @@ function decorateItem(sub, flow, cfg, index) {
     } else if (Number.isFinite(flow.resetDay) && flow.resetDay >= 1 && flow.resetDay <= 31) {
       resetDays = getDaysUntilReset(flow.resetDay);
     } else if (expire) {
-      // 两者都拿不到时：用到期日的「日」推算每月重置
       resetDays = getDaysUntilReset(new Date(expire).getDate());
     }
   }
 
   return {
-    name: String(sub.displayName || flow.planName || name), // 优先显示名称，其次套餐名，最后订阅名
+    name: String(sub.displayName || flow.planName || name),
     error: null,
     used,
     totalBytes: total,
     percent,
-    expire,     // 毫秒时间戳或 null
-    resetDays,  // 天数或 null
+    expire,
+    resetDays,
   };
 }
 
@@ -601,8 +593,6 @@ function errorWidget(bgGradient, refreshTime, colors, msg) {
 
 // ─── 工具函数 ─────────────────────────────────────────────────────────────────
 
-function getConfig_requestJson(ctx, url, cfg) { /* alias */ return requestJson(ctx, url, cfg); }
-
 async function requestJson(ctx, url, cfg) {
   const resp = await ctx.http.get(url, {
     headers: { Accept: "application/json", "User-Agent": "Egern-SubStore-Widget" },
@@ -720,9 +710,6 @@ function preview(s, len) {
   return s.length > len ? s.slice(0, len - 1) + "…" : s;
 }
 
-/**
- * 计算每月固定重置日距今天数（来自直连响应头 reset_day 字段）
- */
 function getDaysUntilReset(resetDay) {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
