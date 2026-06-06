@@ -14,13 +14,12 @@
  *
  *    SUB_STORE_URL=http://192.168.1.100:3000    # Sub-Store 地址（必填）
  *
- *    EXCLUDE_SUB_NAMES=机场A,机场B                  # 指定排除的订阅名称（可选，不填则显示全部）
- *    MATCH_CONTAINS=true                        # 订阅名称模糊匹配（默认 false 精确匹配）
+ *    EXCLUDE_SUB=1,3                            # 指定排除第几个订阅（从1开始，不填则显示全部）
+ *    NO_RESET=1,3                               # EXCLUDE_SUB排除后的订阅，指定第几个不显示重置倒数（从1开始）
  *
  *    TIMEOUT_MS=8000                            # 请求超时毫秒数（默认 8000）
  *    FLOW_USER_AGENT=clash.meta/v1.19.23        # 流量查询 User-Agent
  *    INSECURE_TLS=false                         # 允许不安全的 HTTPS（默认 false）
- *    NO_RESET=1,3                               # 指定第几个订阅不显示重置倒数（从1开始）
  *
  * 2️⃣ 显示数量说明：
  *    - 小尺寸 (systemSmall)：自动显示 2 条
@@ -30,6 +29,7 @@
  * 3️⃣ 注意事项：
  *    - 重置日优先级：API 返回天数 > 响应头 reset_day > 用到期日推算（到期日的日作为每月重置日）
  *    - 一次性流量包（无按月重置）请配置 NO_RESET=1,3，按序号指定（从1开始）
+ *    - EXCLUDE_SUB 和 NO_RESET 的序号均基于 Sub-Store 中的原始订阅顺序
  *    - 小组件每 1 小时自动刷新一次
  */
 
@@ -55,12 +55,10 @@ export default async function (ctx) {
   const colors = makeColors();
   const bgGradient = makeBgGradient();
 
-  // 未配置 Sub-Store 地址
   if (!cfg.baseUrl) {
     return noConfigWidget(bgGradient, refreshTime, colors);
   }
 
-  // 读缓存
   const cached = readCache(ctx, cfg);
 
   let results;
@@ -68,7 +66,6 @@ export default async function (ctx) {
     results = await loadResults(ctx, cfg);
     writeCache(ctx, cfg, results);
   } catch (e) {
-    // 网络失败：有缓存则降级展示，否则报错
     if (cached && cached.length) {
       results = cached;
     } else {
@@ -77,7 +74,7 @@ export default async function (ctx) {
   }
 
   if (!results.length) {
-    return errorWidget(bgGradient, refreshTime, colors, "未找到订阅\n所有订阅均被 EXCLUDE_SUB_NAMES 排除，或 Sub-Store 中没有远程订阅");
+    return errorWidget(bgGradient, refreshTime, colors, "未找到订阅\n所有订阅均被 EXCLUDE_SUB 排除，或 Sub-Store 中没有远程订阅");
   }
 
   const isLarge = ctx.widgetFamily === "systemLarge";
@@ -113,8 +110,8 @@ function getConfig(ctx) {
   return {
     baseUrl: baseUrls[0] || "",
     baseUrls,
-    excludeNames: parseList(env.EXCLUDE_SUB_NAMES || env.EXCLUDE_NAME || ""),
-    matchContains: bool(env.MATCH_CONTAINS, false),
+    // 排除指定序号的订阅（从1开始，基于 Sub-Store 原始顺序）
+    excludeIndexes: parseList(env.EXCLUDE_SUB || "").map(Number).filter((n) => Number.isFinite(n) && n >= 1),
     noResetIndexes: parseList(env.NO_RESET || "").map(Number).filter((n) => Number.isFinite(n) && n >= 1),
     timeout: clampInt(env.TIMEOUT_MS, 8000, 1000, 60000),
     flowUserAgent: env.FLOW_USER_AGENT || "clash.meta/v1.19.23",
@@ -125,24 +122,19 @@ function getConfig(ctx) {
 
 // ─── 数据加载 ────────────────────────────────────────────────────────────────
 
-/**
- * 主流程：拉订阅列表 → 筛选 → 并发查流量
- */
 async function loadResults(ctx, cfg) {
   const subs = await fetchSubscriptions(ctx, cfg);
   const selected = selectSubscriptions(subs, cfg);
   const items = new Array(selected.length);
   await Promise.all(
     selected.map(async (sub, i) => {
+      // index 传的是在 selected 中的序号（1起），NO_RESET 对应显示顺序
       items[i] = await fetchFlowItem(ctx, cfg, sub, i + 1);
     })
   );
   return items;
 }
 
-/**
- * 从 Sub-Store 拉订阅列表，依次尝试多个 baseUrl
- */
 async function fetchSubscriptions(ctx, cfg) {
   const urls = cfg.baseUrls.length ? cfg.baseUrls : [cfg.baseUrl];
   let lastError;
@@ -154,7 +146,7 @@ async function fetchSubscriptions(ctx, cfg) {
       if (Array.isArray(data)) subs = data.filter(Boolean);
       else if (data && typeof data === "object") subs = Object.values(data).filter(Boolean);
       if (subs) {
-        cfg.baseUrl = base; // 记住成功的地址
+        cfg.baseUrl = base;
         return subs;
       }
       throw new Error("订阅列表格式异常");
@@ -165,19 +157,17 @@ async function fetchSubscriptions(ctx, cfg) {
   throw lastError || new Error("无法连接 Sub-Store");
 }
 
+/**
+ * 按原始序号排除指定订阅（EXCLUDE_SUB=1,3 表示排除第1、3个远程订阅）
+ */
 function selectSubscriptions(subs, cfg) {
   const remoteSubs = subs.filter(isRemoteSub);
 
-  if (!cfg.excludeNames.length) return remoteSubs;
+  if (!cfg.excludeIndexes.length) return remoteSubs;
 
-  return remoteSubs.filter((sub) => {
-    const subName = String(sub?.name || "");
-    return !cfg.excludeNames.some((excluded) => {
-      const want = String(excluded).trim();
-      if (cfg.matchContains) return subName.includes(want);
-      return subName === want;
-    });
-  });
+  // 用 Set 加速查找，序号从 1 开始
+  const excluded = new Set(cfg.excludeIndexes);
+  return remoteSubs.filter((_, i) => !excluded.has(i + 1));
 }
 
 function isRemoteSub(sub) {
@@ -188,11 +178,6 @@ function isRemoteSub(sub) {
   return false;
 }
 
-/**
- * 查单个订阅的流量：
- *   1. Sub-Store API（/api/sub/flow/:name）
- *   2. 降级：直连订阅链接读响应头
- */
 async function fetchFlowItem(ctx, cfg, sub, index) {
   const name = String(sub?.name || "未命名订阅");
 
@@ -200,7 +185,6 @@ async function fetchFlowItem(ctx, cfg, sub, index) {
     return { name, error: "订阅不存在" };
   }
 
-  // 尝试 Sub-Store API
   try {
     const json = await requestJson(
       ctx,
@@ -211,7 +195,6 @@ async function fetchFlowItem(ctx, cfg, sub, index) {
     if (hasUsableFlow(flow)) return decorateItem(sub, flow, cfg, index);
   } catch (_) {}
 
-  // 降级：直连订阅链接
   try {
     const flow = await fetchDirectFlow(ctx, cfg, sub);
     if (hasUsableFlow(flow)) return decorateItem(sub, flow, cfg, index);
@@ -220,9 +203,6 @@ async function fetchFlowItem(ctx, cfg, sub, index) {
   return { name, error: "无法获取流量信息" };
 }
 
-/**
- * 直连订阅链接读 subscription-userinfo 响应头
- */
 async function fetchDirectFlow(ctx, cfg, sub) {
   const rawUrl = firstHttpUrl(sub.url || sub.subUserinfo || "");
   if (!rawUrl) throw new Error("订阅链接不可用");
@@ -290,9 +270,6 @@ function parseFlowString(raw) {
   });
 }
 
-/**
- * 将 Sub-Store 流量数据转换为 buildCard 所需的结构
- */
 function decorateItem(sub, flow, cfg, index) {
   const total = finiteOr(flow.total, 0);
   const upload = finiteOr(flow.upload, 0);
@@ -300,7 +277,6 @@ function decorateItem(sub, flow, cfg, index) {
   const used = upload + download;
   const percent = total > 0 ? (used / total) * 100 : 0;
 
-  // 到期时间
   let expire = null;
   if (Number.isFinite(flow.expires) && flow.expires > 0) {
     expire = flow.expires < 1e12 ? flow.expires * 1000 : flow.expires;
@@ -407,7 +383,6 @@ function buildCard(result, colors, ctx) {
   else if (percent >= 80) statusColor = colors.accentSoftYellow;
   else if (percent >= 50) statusColor = colors.accentSoftBlue;
 
-  // 错误卡片
   if (error) {
     return {
       type: "stack",
@@ -436,7 +411,6 @@ function buildCard(result, colors, ctx) {
   const usedStr = formatBytes(used);
   const totalStr = formatBytes(totalBytes);
 
-  // 到期文字
   let expireText = "长期有效";
   if (expire && Number(expire) > 0) {
     const d = new Date(Number(expire));
@@ -455,7 +429,6 @@ function buildCard(result, colors, ctx) {
     borderWidth: 1,
     borderColor: colors.divider,
     children: [
-      // 第一行：名称 / 重置天数 / 百分比
       {
         type: "stack",
         direction: "row",
@@ -496,7 +469,6 @@ function buildCard(result, colors, ctx) {
               },
             ],
       },
-      // 第二行：进度条
       {
         type: "stack",
         direction: "row",
@@ -507,7 +479,6 @@ function buildCard(result, colors, ctx) {
           { type: "stack", flex: Math.max(100 - progressPercent, 1), height: 5, backgroundColor: { light: "#E8E8EA", dark: "#48484A" }, borderRadius: 3 },
         ],
       },
-      // 第三行：用量 / 到期 / 剩余
       {
         type: "stack",
         direction: "row",
