@@ -15,7 +15,7 @@
  *    SUB_STORE_URL=http://192.168.1.100:3000    # Sub-Store 地址（必填）
  *
  *    EXCLUDE_SUB=1,3                            # 指定排除第几个订阅（从1开始，不填则显示全部）
- *    NO_RESET=1,3                               # EXCLUDE_SUB排除后的订阅，指定第几个不显示重置倒数（从1开始）
+ *    NO_RESET=1,3                               # 指定第几个不显示重置日倒数（从1开始，不填则显示全部）
  *
  *    TIMEOUT_MS=8000                            # 请求超时毫秒数（默认 8000）
  *    FLOW_USER_AGENT=clash.meta/v1.19.23        # 流量查询 User-Agent
