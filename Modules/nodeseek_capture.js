@@ -1,11 +1,11 @@
 /**
  * NodeSeek Cookie 抓包脚本
  *
- * 触发条件：访问 NodeSeek 首页 / 个人主页 / 签到相关页面时自动执行
+ * 触发条件：访问 NodeSeek /setting 页面时自动执行
  * 功能：从请求头提取 Cookie，与 Gist 已有值对比，有变化则写入 Gist
  *
  * 注意：NodeSeek 目前有 Cloudflare 防护，Cookie 中需包含 cf_clearance 字段。
- *      建议在手机浏览器中正常访问 NodeSeek 首页，Egern 会自动捕获完整 Cookie。
+ * 建议在手机浏览器中正常访问 NodeSeek 个人设置页，Egern 会自动捕获完整 Cookie。
  *
  */
 
@@ -15,7 +15,7 @@ export default async function (ctx) {
   const GIST_ID    = ctx.env.GIST_ID    || '';
   const GIST_TOKEN = ctx.env.GIST_TOKEN || '';
   const GIST_FILE  = ctx.env.GIST_FILE  || '';
-  const SITE_KEY   = ctx.env.SITE_KEY  || '';
+  const SITE_KEY   = ctx.env.SITE_KEY   || '';
 
   if (!GIST_ID)    { ctx.notify({ title: 'NodeSeek Cookie 抓包', body: '⚠️ 未配置 GIST_ID，请在模块设置中填写' });      return; }
   if (!GIST_TOKEN) { ctx.notify({ title: 'NodeSeek Cookie 抓包', body: '⚠️ 未配置 GIST_TOKEN，请在模块设置中填写' }); return; }
@@ -37,11 +37,11 @@ export default async function (ctx) {
     return;
   }
 
-  // NodeSeek 登录态必须包含 user_token 或 cf_clearance
-  const hasUserToken   = cookie.includes('user_token');
+  // NodeSeek 登录态必须包含 session 或 cf_clearance
+  const hasSession     = cookie.includes('session');
   const hasCfClearance = cookie.includes('cf_clearance');
-  if (!hasUserToken && !hasCfClearance) {
-    console.log('[NodeSeek] Cookie 中未发现 user_token / cf_clearance，可能未登录，跳过');
+  if (!hasSession && !hasCfClearance) {
+    console.log('[NodeSeek] Cookie 中未发现 session / cf_clearance，可能未登录，跳过');
     return;
   }
 
@@ -95,10 +95,10 @@ export default async function (ctx) {
 
   // 提取关键字段用于日志（不暴露完整 Cookie）
   const cfMatch   = cookie.match(/cf_clearance=([^;]{8})/);
-  const utMatch   = cookie.match(/user_token=([^;]{8})/);
+  const sessionMatch = cookie.match(/session=([^;]{8})/);
   const keyFields = [
     cfMatch  ? `cf_clearance=${cfMatch[1]}…`  : null,
-    utMatch  ? `user_token=${utMatch[1]}…`    : null,
+    sessionMatch ? `session=${sessionMatch[1]}…`    : null,
   ].filter(Boolean).join(', ');
   console.log(`[NodeSeek] 关键字段：${keyFields || '(无法识别)'}`);
 
