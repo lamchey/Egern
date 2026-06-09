@@ -26,7 +26,7 @@ scriptings:
   - http_request:
       name: NodeSeek Cookie 捕获
       # 匹配首页、帖子列表、个人主页
-      match: "^https://www\\.nodeseek\\.com/(?!api/)"
+      match: "^https://www\\.nodeseek\\.com/setting"
       script_url: https://raw.githubusercontent.com/lamchey/Egern/refs/heads/main/Modules/nodeseek_capture.js
       body_required: false
       timeout: 30
