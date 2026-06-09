@@ -1,0 +1,31 @@
+name: V2EX Cookie 自动抓取
+description: 拦截 V2EX 个人主页/签到页请求，提取 Cookie 写入 GitHub Gist
+author: lamchey
+icon: checkmark.circle.fill
+
+env_schema:
+  GIST_ID:
+    name: Gist ID
+    description: GitHub Gist ID
+  GIST_TOKEN:
+    name: GitHub Token
+    description: GitHub Token
+  GIST_FILE:
+    name: Gist 文件名
+    description: Gist 中存储签到 Cookie 的 JSON 文件名
+  SITE_KEY:
+    name: Cookie 键名
+    description: JSON 中 Cookie 标识键名
+
+mitm:
+  hostnames:
+    - "www.v2ex.com"
+
+scriptings:
+  - http_request:
+      name: V2EX Cookie 捕获
+      # 匹配个人主页或签到任务页
+      match: "^https://www\\.v2ex\\.com/(member|mission)"
+      script_url: https://raw.githubusercontent.com/lamchey/Egern/refs/heads/main/Modules/v2ex_capture.js
+      body_required: false
+      timeout: 30
