@@ -109,7 +109,7 @@ export default async function (ctx) {
       console.log('[V2EX] Cookie 同步成功 ✅');
       ctx.notify({
         title: 'V2EX Cookie 已更新',
-        body:  '已同步到 Gist，签到脚本将使用新 Cookie',
+        body:  '已同步到 Gist',
         sound: false,
       });
     } else {
