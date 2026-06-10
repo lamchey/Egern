@@ -1,0 +1,32 @@
+name: NodeSeek Cookie 自动抓取
+description: 拦截 NodeSeek 请求头，提取登录 Cookie 写入 GitHub Gist
+author: lamchey
+icon: checkmark.circle.fill
+version: 1.0.0
+
+env_schema:
+  GIST_ID:
+    name: Gist ID
+    description: GitHub Gist ID
+  GIST_TOKEN:
+    name: GitHub Token
+    description: GitHub Token
+  GIST_FILE:
+    name: Gist 文件名
+    description: Gist 中存储签到 Cookie 的 JSON 文件名
+  SITE_KEY:
+    name: Cookie 键名
+    description: JSON 中 Cookie 标识键名
+
+mitm:
+  hostnames:
+    - "www.nodeseek.com"
+
+scriptings:
+  - http_request:
+      name: NodeSeek Cookie 捕获
+      # 匹配首页、帖子列表、个人主页
+      match: "^https://www\\.nodeseek\\.com/setting"
+      script_url: https://raw.githubusercontent.com/lamchey/Egern/refs/heads/main/Modules/nodeseek_capture.js
+      body_required: false
+      timeout: 30
