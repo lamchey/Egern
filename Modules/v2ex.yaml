@@ -1,7 +1,8 @@
 name: V2EX Cookie 自动抓取
-description: 拦截 V2EX 个人主页/签到页请求，提取 Cookie 写入 GitHub Gist
+description: 拦截 V2EX 个人主页/签到页请求，提取 Cookie 并加密写入 GitHub Gist
 author: lamchey
 icon: checkmark.circle.fill
+version: 1.0.1
 
 env_schema:
   GIST_ID:
@@ -16,6 +17,9 @@ env_schema:
   SITE_KEY:
     name: Cookie 键名
     description: JSON 中 Cookie 标识键名
+  GIST_SECRET:
+    name: Gist 加密密钥
+    description: 用于加密 Cookie 的密钥
 
 mitm:
   hostnames:
@@ -24,7 +28,6 @@ mitm:
 scriptings:
   - http_request:
       name: V2EX Cookie 捕获
-      # 匹配个人主页或签到任务页
       match: "^https://www\\.v2ex\\.com/(member|mission)"
       script_url: https://raw.githubusercontent.com/lamchey/Egern/refs/heads/main/Modules/v2ex_capture.js
       body_required: false
