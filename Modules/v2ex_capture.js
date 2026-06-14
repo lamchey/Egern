@@ -1,5 +1,5 @@
 /**
- * V2EX Cookie 抓包脚本
+ * V2EX Cookie 抓包脚本 (强制全量加密 - 兼容初始空状态版)
  */
 import CryptoJS from 'https://esm.sh/crypto-js';
 
@@ -13,7 +13,7 @@ export default async function (ctx) {
   if (!GIST_ID)     { ctx.notify({ title: 'V2EX 抓包', body: '⚠️ 未配置 GIST_ID' }); return; }
   if (!GIST_TOKEN)  { ctx.notify({ title: 'V2EX 抓包', body: '⚠️ 未配置 GIST_TOKEN' }); return; }
   if (!GIST_FILE)   { ctx.notify({ title: 'V2EX 抓包', body: '⚠️ 未配置 GIST_FILE' }); return; }
-  if (!SITE_KEY)    { ctx.notify({ title: 'V2EX 抓包', body: '⚠️ 未配置 SITE_KEY' }); return; }
+  if (!SITE_KEY)    { ctx.notify({ title: 'NodeSeek 抓包', body: '⚠️ 未配置 SITE_KEY' }); return; }
   if (!GIST_SECRET) { ctx.notify({ title: 'V2EX 抓包', body: '⚠️ 未配置 GIST_SECRET 加密密钥' }); return; }
 
   const reqHeaders = ctx.request?.headers || {};
@@ -34,11 +34,13 @@ export default async function (ctx) {
   try {
     const getResp = await ctx.http.get(`https://api.github.com/gists/${GIST_ID}`, { headers: GH_HEADERS, timeout: 15000 });
     if (getResp.status === 200) {
-      const gistData    = await getResp.json();
+      const gistData = await getResp.json();
       const fileContent = gistData?.files?.[GIST_FILE]?.content;
       if (fileContent) {
         const text = fileContent.trim();
-        if (text) {
+        if (text === '' || text === '{}') {
+          existing = {};
+        } else {
           try {
             const bytes = CryptoJS.AES.decrypt(text, GIST_SECRET);
             const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
@@ -46,7 +48,7 @@ export default async function (ctx) {
             existing = JSON.parse(decryptedStr);
           } catch (e) {
             console.log('[V2EX] 解密历史密文失败，终止同步以保护数据: ' + e.message);
-            ctx.notify({ title: '同步被拦截', body: '⚠️ Gist 密文解密失败，请检查 GIST_SECRET 是否一致！' });
+            ctx.notify({ title: '同步被拦截', body: '⚠️ Gist 解密历史密文失败！' });
             return;
           }
         }
