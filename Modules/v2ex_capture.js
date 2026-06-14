@@ -37,36 +37,48 @@ export default async function (ctx) {
       const gistData    = await getResp.json();
       const fileContent = gistData?.files?.[GIST_FILE]?.content;
       if (fileContent) {
-        try { existing = JSON.parse(fileContent); } catch {}
+        const text = fileContent.trim();
+        if (text) {
+          try {
+            const bytes = CryptoJS.AES.decrypt(text, GIST_SECRET);
+            const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
+            if (!decryptedStr) throw new Error('解密结果为空，可能密钥不正确');
+            existing = JSON.parse(decryptedStr);
+          } catch (e) {
+            console.log('[V2EX] 解密历史密文失败，终止同步以保护数据: ' + e.message);
+            ctx.notify({ title: '同步被拦截', body: '⚠️ Gist 密文解密失败，请检查 GIST_SECRET 是否一致！' });
+            return;
+          }
+        }
       }
     }
   } catch (e) {
-    console.log('[V2EX] 读取历史 Gist 失败，将覆盖写入');
+    console.log('[V2EX] 读取历史 Gist 失败，将作为全新文件加密写入');
   }
 
-  // 执行 AES 加密
-  const encryptedCookie = CryptoJS.AES.encrypt(cookie, GIST_SECRET).toString();
-
   existing[SITE_KEY] = {
-    cookie:     encryptedCookie,
+    cookie:     cookie,
     updated_at: Math.floor(Date.now() / 1000),
     source_url: ctx.request?.url ?? '',
   };
 
+  const fullJsonStr = JSON.stringify(existing, null, 2);
+  const encryptedContent = CryptoJS.AES.encrypt(fullJsonStr, GIST_SECRET).toString();
+
   try {
     const patchResp = await ctx.http.patch(`https://api.github.com/gists/${GIST_ID}`, {
         headers: { ...GH_HEADERS, 'Content-Type': 'application/json' },
-        body: { files: { [GIST_FILE]: { content: JSON.stringify(existing, null, 2) } } },
+        body: { files: { [GIST_FILE]: { content: encryptedContent } } },
         timeout: 15000,
     });
 
     if (patchResp.status === 200) {
-      console.log('[V2EX] Cookie 加密同步成功 ✅');
+      console.log('[V2EX] 加密同步成功 ✅');
       ctx.notify({ title: 'V2EX Cookie 已更新', body: '已加密同步到 Gist', sound: false });
     } else {
-      ctx.notify({ title: 'V2EX Cookie 同步失败', body: `HTTP ${patchResp.status}` });
+      ctx.notify({ title: 'V2EX 同步失败', body: `HTTP ${patchResp.status}` });
     }
   } catch (e) {
-    ctx.notify({ title: 'V2EX Cookie 同步异常', body: e.message });
+    ctx.notify({ title: 'V2EX 同步异常', body: e.message });
   }
 }
