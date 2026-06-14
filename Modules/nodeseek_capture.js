@@ -38,11 +38,13 @@ export default async function (ctx) {
   try {
     const getResp = await ctx.http.get(`https://api.github.com/gists/${GIST_ID}`, { headers: GH_HEADERS, timeout: 15000 });
     if (getResp.status === 200) {
-      const gistData    = await getResp.json();
+      const gistData = await getResp.json();
       const fileContent = gistData?.files?.[GIST_FILE]?.content;
       if (fileContent) {
         const text = fileContent.trim();
-        if (text) {
+        if (text === '' || text === '{}') {
+          existing = {};
+        } else {
           try {
             const bytes = CryptoJS.AES.decrypt(text, GIST_SECRET);
             const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
@@ -50,7 +52,7 @@ export default async function (ctx) {
             existing = JSON.parse(decryptedStr);
           } catch (e) {
             console.log('[NodeSeek] 解密历史密文失败，终止同步以保护数据: ' + e.message);
-            ctx.notify({ title: '同步被拦截', body: '⚠️ Gist 密文解密失败，请检查 GIST_SECRET 是否一致！' });
+            ctx.notify({ title: '同步被拦截', body: '⚠️ Gist 解密历史密文失败！' });
             return; 
           }
         }
@@ -60,7 +62,6 @@ export default async function (ctx) {
     console.log('[NodeSeek] 读取历史 Gist 失败，将作为全新文件加密写入');
   }
 
-  // 更新当前站点的明文数据
   existing[SITE_KEY] = {
     cookie:     cookie,
     updated_at: Math.floor(Date.now() / 1000),
