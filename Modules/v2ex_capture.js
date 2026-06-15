@@ -1,5 +1,5 @@
 /**
- * V2EX Cookie 抓包脚本 (强制全量加密 - 兼容初始空状态版)
+ * V2EX Cookie 抓包脚本
  */
 import CryptoJS from 'https://esm.sh/crypto-js';
 
