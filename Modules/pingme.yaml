@@ -1,0 +1,35 @@
+name: PingMe 自动抓取
+description: 拦截 PingMe App 的余额查询请求，提取签到所需参数与请求头，按账号指纹区分多账号，加密写入 GitHub Gist
+author: lamchey
+icon: checkmark.circle.fill
+version: 1.0.0
+
+env_schema:
+  GIST_ID:
+    name: Gist ID
+    description: GitHub Gist ID
+  GIST_TOKEN:
+    name: GitHub Token
+    description: GitHub Token
+  GIST_FILE:
+    name: Gist 文件名
+    description: Gist 中存储签到数据的 JSON 文件名
+  SITE_KEY:
+    name: 站点键名
+    description: JSON 中 Cookie 标识键名
+  GIST_SECRET:
+    name: Gist 加密密钥
+    description: 用于加密 Cookie 的密钥
+
+mitm:
+  hostnames:
+    - "api.pingmeapp.net"
+
+scriptings:
+  - http_request:
+      name: PingMe 账号捕获
+      # 打开 App 首页查询余额时触发，多账号需卸载 App 后重新登录抓取
+      match: "^https://api\\.pingmeapp\\.net/app/queryBalanceAndBonus"
+      script_url: https://raw.githubusercontent.com/lamchey/Egern/refs/heads/main/Modules/pingme_capture.js
+      body_required: false
+      timeout: 30
