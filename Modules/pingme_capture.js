@@ -7,9 +7,6 @@
  *
  * 多账号抓包：抓包多账号需卸载 PingMe 软件重新下载登录新的账号再执行抓包
  */
-/**
- * PingMe Cookie 密码学加密抓包脚本 (全文件加密 - 多账号兼容版)
- */
 import CryptoJS from 'https://esm.sh/crypto-js';
 
 export default async function (ctx) {
