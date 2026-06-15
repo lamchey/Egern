@@ -29,7 +29,7 @@ scriptings:
   - http_request:
       name: PingMe 账号捕获
       # 打开 App 首页查询余额时触发，多账号需卸载 App 后重新登录抓取
-      match: "^https://api\\.pingmeapp\\.net/app/queryBalanceAndBonus"
+      match: "^https:\\/\\/api\\.pingmeapp\\.net\\/app\\/queryBalanceAndBonus"
       script_url: https://raw.githubusercontent.com/lamchey/Egern/refs/heads/main/Modules/pingme_capture.js
       body_required: false
       timeout: 30
