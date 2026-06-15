@@ -24,7 +24,20 @@ export default async function (ctx) {
   const reqUrl = ctx.request?.url || '';
   if (!reqUrl) return;
 
-  // ── 解析 URL 参数和 Headers ──────────────────────────────────────────
+  const now = Date.now();
+  const lockKey = `lock_timestamp_${SITE_KEY}`;
+  
+  let lastRunTime = 0;
+  try {
+    const stored = await ctx.store.get(lockKey);
+    if (stored) lastRunTime = parseInt(stored, 10);
+  } catch (e) {}
+
+  if (now - lastRunTime < 15000) {
+    console.log(`[PingMe] 拦截到高频连发请求，距离上次处理仅 ${now - lastRunTime}ms，跳过本次回写以防 409 冲突。`);
+    return;
+  }
+
   function parseRawQuery(url) {
     const query = (url.split('?')[1] || '').split('#')[0];
     const rawMap = {};
@@ -46,22 +59,20 @@ export default async function (ctx) {
   function fingerprintOf(paramsRaw) {
     const drop = { sign:1, signDate:1, timestamp:1, ts:1, nonce:1, random:1, reqTime:1, reqId:1, requestId:1 };
     const base = Object.keys(paramsRaw || {}).filter(k => !drop[k]).sort().map(k => `${k}=${paramsRaw[k]}`).join('&');
-    return CryptoJS.MD5(base).toString().slice(0, 12); 
+    return CryptoJS.MD5(base).toString().slice(0, 12);
   }
 
   const paramsRaw = parseRawQuery(reqUrl);
   const headersMap = normalizeHeaderNameMap(ctx.request.headers || {});
-  if (!paramsRaw.uniquedeviceid) {
-    console.log('[PingMe] 参数不完整，忽略该请求');
-    return;
-  }
+  if (!paramsRaw.uniquedeviceid) return;
+
+  try { await ctx.store.set(lockKey, String(now)); } catch (e) {}
 
   let baseUA = '';
   Object.keys(headersMap).forEach(k => { if (k.toLowerCase() === 'user-agent') baseUA = headersMap[k]; });
   const fp = fingerprintOf(paramsRaw);
-  const now = Date.now();
 
-  console.log('[PingMe] 捕获到有效请求，准备下载并解密 Gist...');
+  console.log('[PingMe] 防抖校验通过，开始拉取并合并 Gist 数据...');
 
   const GH_HEADERS = {
     'Authorization': `Bearer ${GIST_TOKEN}`,
@@ -77,24 +88,15 @@ export default async function (ctx) {
       const fileContent = gistData?.files?.[GIST_FILE]?.content;
       if (fileContent) {
         const text = fileContent.trim();
-        if (text === '' || text === '{}') {
-          existing = {};
-        } else {
-          try {
-            const bytes = CryptoJS.AES.decrypt(text, GIST_SECRET);
-            const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
-            if (!decryptedStr) throw new Error('解密结果为空');
-            existing = JSON.parse(decryptedStr);
-          } catch (e) {
-            console.log('[PingMe] 解密历史密文失败，终止同步以保护数据: ' + e.message);
-            ctx.notify({ title: 'PingMe 抓包被拦截', body: '⚠️ Gist 密文解密失败！' });
-            return;
-          }
+        if (text && text !== '{}') {
+          const bytes = CryptoJS.AES.decrypt(text, GIST_SECRET);
+          const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
+          existing = JSON.parse(decryptedStr);
         }
       }
     }
   } catch (e) {
-    console.log('[PingMe] 读取历史失败，将作为新文件写入');
+    console.log('[PingMe] 读取历史失败，将作为新结构初始化');
   }
 
   let store = { version: 1, accounts: {}, order: [] };
@@ -121,15 +123,12 @@ export default async function (ctx) {
   if (!existed) store.order.push(fp);
 
   existing[SITE_KEY] = {
-    cookie:     JSON.stringify(store), 
+    cookie:     JSON.stringify(store),
     updated_at: Math.floor(now / 1000),
     source_url: 'api.pingmeapp.net'
   };
 
-  const total = store.order.length;
-
-  const fullJsonStr = JSON.stringify(existing, null, 2);
-  const encryptedContent = CryptoJS.AES.encrypt(fullJsonStr, GIST_SECRET).toString();
+  const encryptedContent = CryptoJS.AES.encrypt(JSON.stringify(existing, null, 2), GIST_SECRET).toString();
 
   try {
     const patchResp = await ctx.http.patch(`https://api.github.com/gists/${GIST_ID}`, {
@@ -139,12 +138,10 @@ export default async function (ctx) {
     });
 
     if (patchResp.status === 200) {
-      console.log(`[PingMe] 加密同步成功 ✅ (总账号数: ${total})`);
-      ctx.notify({ title: existed ? '🔄 账号参数已更新' : '✅ 新账号已入库', body: `${alias}\n当前账号总数：${total}\n已安全同步至 Gist`, sound: false });
-    } else {
-      ctx.notify({ title: 'PingMe 同步失败', body: `HTTP ${patchResp.status}` });
+      ctx.notify({ title: existed ? '🔄 PingMe 参数已更新' : '✅ PingMe 新账号入库', body: `${alias} 密文已安全同步。`, sound: false });
     }
   } catch (e) {
-    ctx.notify({ title: 'PingMe 同步异常', body: e.message });
+    try { await ctx.store.set(lockKey, '0'); } catch (el) {}
+    console.log('[PingMe] 上传发生异常: ' + e.message);
   }
 }
