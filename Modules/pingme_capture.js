@@ -88,15 +88,36 @@ export default async function (ctx) {
       const fileContent = gistData?.files?.[GIST_FILE]?.content;
       if (fileContent) {
         const text = fileContent.trim();
-        if (text && text !== '{}') {
-          const bytes = CryptoJS.AES.decrypt(text, GIST_SECRET);
-          const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
-          existing = JSON.parse(decryptedStr);
+        if (text === '' || text === '{}') {
+          existing = {};
+        } else {
+          // ✅ 修复：解密失败时中止，防止覆盖其他站点节点
+          try {
+            const bytes = CryptoJS.AES.decrypt(text, GIST_SECRET);
+            const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
+            if (!decryptedStr) throw new Error('解密结果为空，可能密钥不正确');
+            existing = JSON.parse(decryptedStr);
+          } catch (e) {
+            console.log('[PingMe] 解密历史密文失败，终止同步以保护数据: ' + e.message);
+            ctx.notify({ title: '同步被拦截', body: '⚠️ Gist 解密历史密文失败！' });
+            try { await ctx.store.set(lockKey, '0'); } catch (el) {}
+            return;
+          }
         }
       }
+    } else {
+      // ✅ 修复：读取 Gist 本身失败（非网络异常）时也中止，避免误覆盖
+      console.log(`[PingMe] 读取 Gist 失败，HTTP ${getResp.status}，终止同步`);
+      ctx.notify({ title: 'PingMe 同步被中止', body: `⚠️ 读取 Gist 失败 HTTP ${getResp.status}` });
+      try { await ctx.store.set(lockKey, '0'); } catch (el) {}
+      return;
     }
   } catch (e) {
-    console.log('[PingMe] 读取历史失败，将作为新结构初始化');
+    // 网络异常（超时、DNS 失败等）：同样中止，不冒险写入
+    console.log('[PingMe] 网络异常，无法读取 Gist，终止同步: ' + e.message);
+    ctx.notify({ title: 'PingMe 同步被中止', body: '⚠️ 网络异常，无法读取历史数据' });
+    try { await ctx.store.set(lockKey, '0'); } catch (el) {}
+    return;
   }
 
   let store = { version: 1, accounts: {}, order: [] };
@@ -139,9 +160,12 @@ export default async function (ctx) {
 
     if (patchResp.status === 200) {
       ctx.notify({ title: existed ? '🔄 PingMe 参数已更新' : '✅ PingMe 新账号入库', body: `${alias} 密文已安全同步。`, sound: false });
+    } else {
+      ctx.notify({ title: 'PingMe 同步失败', body: `HTTP ${patchResp.status}` });
     }
   } catch (e) {
     try { await ctx.store.set(lockKey, '0'); } catch (el) {}
     console.log('[PingMe] 上传发生异常: ' + e.message);
+    ctx.notify({ title: 'PingMe 同步异常', body: e.message });
   }
 }
