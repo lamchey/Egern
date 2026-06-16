@@ -12,25 +12,24 @@
  * 📝 使用说明
  * 1️⃣ 添加环境变量（在 Egern 中进入小组件"编辑环境变量"）：
  *
- *    SUB_STORE_URL=http://192.168.1.100:3000    # Sub-Store 地址（必填）
+ * SUB_STORE_URL=http://192.168.1.100:3000    # Sub-Store 地址（必填）
  *
- *    EXCLUDE_SUB=1,3                            # 指定排除第几个订阅（从1开始，不填则显示全部）
- *    NO_RESET=1,3                               # 指定第几个不显示重置日倒数（从1开始，不填则显示全部）
+ * INEXCLUDE_SUB=1,3                          # 指定显示第几个订阅（从1开始，不填则显示全部，支持 1,3 或 1-4）
+ * RESET=1,3                                  # 指定第几个显示重置日倒数（从1开始，不填则不显示，支持 1,3 或 1-4）
  *
- *    TIMEOUT_MS=8000                            # 请求超时毫秒数（默认 8000）
- *    FLOW_USER_AGENT=clash.meta/v1.19.23        # 流量查询 User-Agent
- *    INSECURE_TLS=false                         # 允许不安全的 HTTPS（默认 false）
+ * TIMEOUT_MS=8000                            # 请求超时毫秒数（默认 8000）
+ * FLOW_USER_AGENT=clash.meta/v1.19.23        # 流量查询 User-Agent
+ * INSECURE_TLS=false                         # 允许不安全的 HTTPS（默认 false）
  *
  * 2️⃣ 显示数量说明：
- *    - 小尺寸 (systemSmall)：自动显示 2 条
- *    - 中尺寸 (systemMedium)：自动显示 2 条
- *    - 大尺寸 (systemLarge)：自动显示 5 条
+ * - 小尺寸 (systemSmall)：自动显示 2 条
+ * - 中尺寸 (systemMedium)：自动显示 2 条
+ * - 大尺寸 (systemLarge)：自动显示 5 条
  *
  * 3️⃣ 注意事项：
- *    - 重置日优先级：API 返回天数 > 响应头 reset_day > 用到期日推算（到期日的日作为每月重置日）
- *    - 一次性流量包（无按月重置）请配置 NO_RESET=1,3，按序号指定（从1开始）
- *    - EXCLUDE_SUB 和 NO_RESET 的序号均基于 Sub-Store 中的原始订阅顺序
- *    - 小组件每 1 小时自动刷新一次
+ * - 重置日优先级：API 返回天数 > 响应头 reset_day > 用到期日推算（到期日的日作为每月重置日）
+ * - INEXCLUDE_SUB 和 RESET 的序号均基于 Sub-Store 中的原始订阅顺序
+ * - 小组件每 1 小时自动刷新一次
  */
 
 // ─── 常量 ────────────────────────────────────────────────────────────────────
@@ -74,7 +73,7 @@ export default async function (ctx) {
   }
 
   if (!results.length) {
-    return errorWidget(bgGradient, refreshTime, colors, "未找到订阅\n所有订阅均被 EXCLUDE_SUB 排除，或 Sub-Store 中没有远程订阅");
+    return errorWidget(bgGradient, refreshTime, colors, "未找到订阅\n所有订阅均被过滤，或 Sub-Store 中没有远程订阅");
   }
 
   const isLarge = ctx.widgetFamily === "systemLarge";
@@ -110,9 +109,10 @@ function getConfig(ctx) {
   return {
     baseUrl: baseUrls[0] || "",
     baseUrls,
-    // 排除指定序号的订阅（从1开始，基于 Sub-Store 原始顺序）
-    excludeIndexes: parseList(env.EXCLUDE_SUB || "").map(Number).filter((n) => Number.isFinite(n) && n >= 1),
-    noResetIndexes: parseList(env.NO_RESET || "").map(Number).filter((n) => Number.isFinite(n) && n >= 1),
+    // 解析需要显示的订阅序号（不填代表全部显示）
+    includeIndexes: parseRangeList(env.INEXCLUDE_SUB || ""),
+    // 解析需要显示重置日的订阅序号（不填代表都不显示）
+    resetIndexes: parseRangeList(env.RESET || ""),
     timeout: clampInt(env.TIMEOUT_MS, 8000, 1000, 60000),
     flowUserAgent: env.FLOW_USER_AGENT || "clash.meta/v1.19.23",
     insecureTls: bool(env.INSECURE_TLS, false),
@@ -124,15 +124,21 @@ function getConfig(ctx) {
 
 async function loadResults(ctx, cfg) {
   const subs = await fetchSubscriptions(ctx, cfg);
-  const selected = selectSubscriptions(subs, cfg);
+  
+  // 过滤远程订阅，并保留它在原始远程订阅列表中的 1-based 索引位置
+  const remoteSubsWithIndex = subs.filter(isRemoteSub).map((sub, i) => ({ sub, originalIndex: i + 1 }));
+  
+  // 根据 INEXCLUDE_SUB 进行白名单筛选
+  const selected = selectSubscriptions(remoteSubsWithIndex, cfg);
+  
   const items = new Array(selected.length);
   await Promise.all(
-    selected.map(async (sub, i) => {
-      // index 传的是在 selected 中的序号（1起），NO_RESET 对应显示顺序
-      items[i] = await fetchFlowItem(ctx, cfg, sub, i + 1);
+    selected.map(async (item, i) => {
+      // 将原始序号 originalIndex 传给 fetchFlowItem，用于 RESET 的判定
+      items[i] = await fetchFlowItem(ctx, cfg, item.sub, item.originalIndex);
     })
   );
-  return items;
+  return items.filter(Boolean);
 }
 
 async function fetchSubscriptions(ctx, cfg) {
@@ -158,16 +164,14 @@ async function fetchSubscriptions(ctx, cfg) {
 }
 
 /**
- * 按原始序号排除指定订阅（EXCLUDE_SUB=1,3 表示排除第1、3个远程订阅）
+ * 根据 INEXCLUDE_SUB 白名单筛选订阅
  */
-function selectSubscriptions(subs, cfg) {
-  const remoteSubs = subs.filter(isRemoteSub);
-
-  if (!cfg.excludeIndexes.length) return remoteSubs;
-
-  // 用 Set 加速查找，序号从 1 开始
-  const excluded = new Set(cfg.excludeIndexes);
-  return remoteSubs.filter((_, i) => !excluded.has(i + 1));
+function selectSubscriptions(remoteSubsWithIndex, cfg) {
+  if (!cfg.includeIndexes || cfg.includeIndexes.length === 0) {
+    return remoteSubsWithIndex;
+  }
+  const allowed = new Set(cfg.includeIndexes);
+  return remoteSubsWithIndex.filter((item) => allowed.has(item.originalIndex));
 }
 
 function isRemoteSub(sub) {
@@ -178,7 +182,7 @@ function isRemoteSub(sub) {
   return false;
 }
 
-async function fetchFlowItem(ctx, cfg, sub, index) {
+async function fetchFlowItem(ctx, cfg, sub, originalIndex) {
   const name = String(sub?.name || "未命名订阅");
 
   if (sub.missing) {
@@ -192,12 +196,12 @@ async function fetchFlowItem(ctx, cfg, sub, index) {
       cfg
     );
     const flow = normalizeFlow(unwrap(json));
-    if (hasUsableFlow(flow)) return decorateItem(sub, flow, cfg, index);
+    if (hasUsableFlow(flow)) return decorateItem(sub, flow, cfg, originalIndex);
   } catch (_) {}
 
   try {
     const flow = await fetchDirectFlow(ctx, cfg, sub);
-    if (hasUsableFlow(flow)) return decorateItem(sub, flow, cfg, index);
+    if (hasUsableFlow(flow)) return decorateItem(sub, flow, cfg, originalIndex);
   } catch (_) {}
 
   return { name, error: "无法获取流量信息" };
@@ -270,7 +274,7 @@ function parseFlowString(raw) {
   });
 }
 
-function decorateItem(sub, flow, cfg, index) {
+function decorateItem(sub, flow, cfg, originalIndex) {
   const total = finiteOr(flow.total, 0);
   const upload = finiteOr(flow.upload, 0);
   const download = finiteOr(flow.download, 0);
@@ -283,10 +287,12 @@ function decorateItem(sub, flow, cfg, index) {
   }
 
   const name = String(sub.name || "订阅");
-  const isNoReset = cfg && Array.isArray(cfg.noResetIndexes) && cfg.noResetIndexes.includes(index);
+  
+  // 只有在 RESET 列表中明确指定的序号，才允许计算并显示重置日
+  const isShowReset = cfg && Array.isArray(cfg.resetIndexes) && cfg.resetIndexes.includes(originalIndex);
   let resetDays = null;
 
-  if (!isNoReset) {
+  if (isShowReset) {
     if (Number.isFinite(flow.remainingDays) && flow.remainingDays >= 0) {
       resetDays = Math.max(0, Math.floor(flow.remainingDays));
     } else if (Number.isFinite(flow.resetDay) && flow.resetDay >= 1 && flow.resetDay <= 31) {
@@ -641,10 +647,33 @@ function getHeader(headers, name) {
   return "";
 }
 
-function parseList(v) {
+/**
+ * 支持逗号分隔以及连字符连贯范围的高级解析器 (例如: "1,3" -> [1,3], "1-4" -> [1,2,3,4])
+ */
+function parseRangeList(v) {
   const s = String(v || "").trim();
   if (!s) return [];
-  return s.split(/[\n,|]+/).map((x) => x.trim()).filter(Boolean);
+  const segments = s.split(/[\n,|]+/).map((x) => x.trim()).filter(Boolean);
+  const result = [];
+  
+  for (const segment of segments) {
+    if (segment.includes("-")) {
+      const parts = segment.split("-").map((x) => parseInt(x.trim(), 10));
+      if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+        const start = Math.min(parts[0], parts[1]);
+        const end = Math.max(parts[0], parts[1]);
+        for (let i = start; i <= end; i++) {
+          if (i >= 1) result.push(i);
+        }
+      }
+    } else {
+      const n = parseInt(segment, 10);
+      if (Number.isFinite(n) && n >= 1) {
+        result.push(n);
+      }
+    }
+  }
+  return [...new Set(result)].sort((a, b) => a - b);
 }
 
 function bool(v, def) {
