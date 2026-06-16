@@ -13,8 +13,8 @@ export default async function (ctx) {
   if (!GIST_ID)     { ctx.notify({ title: 'V2EX 抓包', body: '⚠️ 未配置 GIST_ID' }); return; }
   if (!GIST_TOKEN)  { ctx.notify({ title: 'V2EX 抓包', body: '⚠️ 未配置 GIST_TOKEN' }); return; }
   if (!GIST_FILE)   { ctx.notify({ title: 'V2EX 抓包', body: '⚠️ 未配置 GIST_FILE' }); return; }
-  if (!SITE_KEY)    { ctx.notify({ title: 'NodeSeek 抓包', body: '⚠️ 未配置 SITE_KEY' }); return; }
-  if (!GIST_SECRET) { ctx.notify({ title: 'V2EX 抓包', body: '⚠️ 未配置 GIST_SECRET 加密密钥' }); return; }
+  if (!SITE_KEY)    { ctx.notify({ title: 'V2EX 抓包', body: '⚠️ 未配置 SITE_KEY' }); return; }  
+  if (!GIST_SECRET) { ctx.notify({ title: 'V2EX 抓包', body: '⚠️ 未配置 GIST_SECRET' }); return; }
 
   const reqHeaders = ctx.request?.headers || {};
   const cookieKey  = Object.keys(reqHeaders).find(k => k.toLowerCase() === 'cookie');
