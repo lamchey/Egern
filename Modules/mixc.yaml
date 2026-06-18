@@ -1,0 +1,35 @@
+name: 一点万象自动抓取
+description: 拦截万象星 App 的网关请求体，提取签到所需 token/deviceParams 等参数，加密写入 GitHub Gist
+author: lamchey
+icon: checkmark.circle.fill
+version: 1.0.0
+
+env_schema:
+  GIST_ID:
+    name: Gist ID
+    description: GitHub Gist ID
+  GIST_TOKEN:
+    name: GitHub Token
+    description: GitHub Token
+  GIST_FILE:
+    name: Gist 文件名
+    description: Gist 中存储签到数据的 JSON 文件名
+  SITE_KEY:
+    name: 站点键名
+    description: JSON 中 Cookie 标识键名
+  GIST_SECRET:
+    name: Gist 加密密钥
+    description: 用于加密 Cookie 的密钥
+
+mitm:
+  hostnames:
+    - "app.mixcapp.com"
+
+scriptings:
+  - http_request:
+      name: 一点万象参数捕获
+      # 打开 App 进入任意商场签到页时触发；切换商场需重新打开该商场页面再次触发抓包
+      match: "^https:\\/\\/app\\.mixcapp\\.com\\/mixc\\/gateway"
+      script_url: https://raw.githubusercontent.com/lamchey/Egern/refs/heads/main/Modules/mixc_capture.js
+      body_required: true
+      timeout: 30
