@@ -32,4 +32,5 @@ scriptings:
       match: "^https:\\/\\/app\\.mixcapp\\.com\\/mixc\\/gateway"
       script_url: https://raw.githubusercontent.com/lamchey/Egern/refs/heads/main/Modules/mixc_capture.js
       body_required: true
+      max_size: 262144
       timeout: 30
