@@ -11,7 +11,8 @@ import CryptoJS from 'https://esm.sh/crypto-js';
 
 const KEEP_FIELDS = ['X-Mixc-Swimlane', 'appId', 'appVersion', 'deviceParams', 'imei', 'mallNo', 'osVersion', 'params', 'platform', 'token'];
 const REQUIRED_FIELDS = ['token', 'deviceParams', 'mallNo'];
-const COMPARE_FIELDS = [...KEEP_FIELDS, 'apiVersion', 'capturePlatform'];
+const COMPARE_FIELDS = [...KEEP_FIELDS, 'apiVersion', 'captureAction', 'captureSignCheck'];
+const SIGN_SECRET = 'P@Gkbu0shTNHjhM!7F';
 const KEEP_FIELD_MAP = KEEP_FIELDS.reduce((m, k) => {
   m[k.toLowerCase()] = k;
   return m;
@@ -23,6 +24,34 @@ function canonicalField(k) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function calcSign(p) {
+  const keys = Object.keys(p || {}).filter(k => k !== 'sign').sort();
+  let t = '';
+  for (const k of keys) {
+    const v = p[k];
+    if (v || v === 0 || v === '') t += `${k}=${v}&`;
+  }
+  return CryptoJS.MD5(t + SIGN_SECRET).toString();
+}
+
+function verifyCapturedSign(form) {
+  if (!form || !form.sign) return { available: false };
+  const signInput = {};
+  Object.keys(form).forEach(k => {
+    if (k === 'sign') return;
+    const v = form[k];
+    if (v === undefined || v === null) return;
+    signInput[k] = String(v);
+  });
+  const expected = calcSign(signInput);
+  return {
+    available: true,
+    ok: expected === String(form.sign),
+    expected,
+    actual: String(form.sign),
+  };
 }
 
 function fieldSnapshot(obj) {
@@ -177,12 +206,42 @@ export default async function (ctx) {
   }
 
   if (!reqUrl) return;
+  if (!isGateway) {
+    console.log(`[一点万象] 非 gateway 请求，跳过。url=${reqUrl}`);
+    return;
+  }
 
   const reqBody = ctx.request?.body ?? ctx.request?.bodyBytes ?? ctx.request?.rawBody ?? '';
-  const form = await parseForm(reqBody, reqUrl);
+  const bodyForm = await parseForm(reqBody, reqUrl);
+  const form = { ...bodyForm };
   mergeObject(form, ctx.request?.headers || {});
   const hasAnyUsefulField = KEEP_FIELDS.some(k => form[k] !== undefined);
   if (!hasAnyUsefulField) return;
+
+  const platform = String(form.platform || '').toLowerCase();
+  if (platform !== 'h5') {
+    console.log(`[一点万象] 非 h5 gateway 请求，跳过。platform=${form.platform || '-'} keys=${Object.keys(form).join(',')}`);
+    return;
+  }
+
+  const missingNow = REQUIRED_FIELDS.filter(k => !form[k]);
+  if (missingNow.length) {
+    console.log(`[一点万象] h5 gateway 请求缺少关键字段，跳过。missing=${missingNow.join(',')} keys=${Object.keys(form).join(',')}`);
+    return;
+  }
+
+  const signCheck = verifyCapturedSign(bodyForm);
+  if (signCheck.available) {
+    console.log(`[一点万象] 捕获请求签名自检：${signCheck.ok ? '通过' : '不匹配'} action=${form.action || '-'}`);
+    if (!signCheck.ok) {
+      ctx.notify({
+        title: '一点万象抓包异常',
+        body: '⚠️ 捕获请求签名自检失败，当前签名算法可能已变化，已跳过保存',
+        sound: false,
+      });
+      return;
+    }
+  }
 
   const now = Date.now();
   const lockKey = `lock_timestamp_${SITE_KEY}`;
@@ -201,12 +260,11 @@ export default async function (ctx) {
 
   const captured = {};
   KEEP_FIELDS.forEach(k => { if (form[k] !== undefined) captured[k] = form[k]; });
-  if (captured.platform && captured.platform !== 'h5') captured.capturePlatform = captured.platform;
   captured.platform = 'h5';
   if (!captured.apiVersion) captured.apiVersion = '1.0';
+  if (form.action) captured.captureAction = form.action;
+  if (signCheck.available) captured.captureSignCheck = signCheck.ok ? 'ok' : 'mismatch';
   console.log(`[一点万象] 捕获到候选参数：${Object.keys(captured).join(',')}`);
-
-  if (!captured.token && !captured.mallNo && !captured.deviceParams) return;
 
   console.log('[一点万象] 开始拉取并合并 Gist 数据...');
 
