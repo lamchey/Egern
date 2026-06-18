@@ -1,8 +1,8 @@
 /**
  * 一点万象（MixC）抓包脚本
  *
- * 触发条件：手机上打开万象星 App，进入任意商场页面（请求会带上 token/deviceParams 等参数）
- * 功能：拦截 /mixc/gateway 的 H5 渠道请求体，提取签到所需参数，加密写入 Gist
+ * 触发条件：手机上打开万象星 App，进入签到页，拦截 /mixc/gateway 的 H5 渠道请求体
+ * 功能：从原 QX 一体脚本中分离出的抓包部分，提取签到所需参数，加密写入 Gist
  *
  * 说明：该 App 同一账号可能逛多个商场（mallNo 不同），抓包脚本只保留最近一次访问的商场参数，
  *       如需切换签到的商场，重新打开对应商场页面再次触发抓包即可。
@@ -105,7 +105,7 @@ export default async function (ctx) {
 
   const reqBody = ctx.request?.body ?? ctx.request?.bodyBytes ?? ctx.request?.rawBody ?? '';
   const form = parseForm(reqBody, reqUrl);
-  if (!form.token || !form.deviceParams || !form.mallNo) {
+  if (form.platform !== 'h5' || !form.token || !form.deviceParams) {
     const bodyType = reqBody && reqBody.constructor ? reqBody.constructor.name : typeof reqBody;
     console.log(`[一点万象] 当前请求缺少签到关键字段，跳过。url=${reqUrl} bodyType=${bodyType} keys=${Object.keys(form).slice(0, 20).join(',')}`);
     return;
