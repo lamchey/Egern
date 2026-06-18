@@ -24,13 +24,12 @@ env_schema:
 mitm:
   hostnames:
     - "app.mixcapp.com"
-    - "*.mixcapp.com"
 
 scriptings:
   - http_request:
       name: 一点万象参数捕获
-      # 打开 App 进入任意商场签到页时触发；切换商场需重新打开该商场页面再次触发抓包
-      match: "^https:\\/\\/[^/]*mixcapp\\.com\\/"
+      # 打开 App 进入任意商场签到页时触发；只接受 gateway 的 H5 请求，避免 popup/native 参数污染
+      match: "^https:\\/\\/app\\.mixcapp\\.com\\/mixc\\/gateway"
       script_url: https://raw.githubusercontent.com/lamchey/Egern/refs/heads/main/Modules/mixc_capture.js
-      body_required: true
+      body_required: false
       timeout: 30
