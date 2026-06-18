@@ -168,13 +168,6 @@ export default async function (ctx) {
   const reqBody = ctx.request?.body ?? ctx.request?.bodyBytes ?? ctx.request?.rawBody ?? '';
   const form = await parseForm(reqBody, reqUrl);
   mergeObject(form, ctx.request?.headers || {});
-  if (form.platform && form.platform !== 'h5') {
-    const bodyType = reqBody && reqBody.constructor ? reqBody.constructor.name : typeof reqBody;
-    const keys = Object.keys(form).slice(0, 20).join(',');
-    console.log(`[一点万象] 非 h5 请求，跳过。url=${reqUrl} bodyType=${bodyType} keys=${keys}`);
-    return;
-  }
-
   const hasAnyUsefulField = KEEP_FIELDS.some(k => form[k] !== undefined);
   if (!hasAnyUsefulField) return;
 
@@ -195,7 +188,8 @@ export default async function (ctx) {
 
   const captured = {};
   KEEP_FIELDS.forEach(k => { if (form[k] !== undefined) captured[k] = form[k]; });
-  if (!captured.platform) captured.platform = 'h5';
+  if (captured.platform && captured.platform !== 'h5') captured.capturePlatform = captured.platform;
+  captured.platform = 'h5';
   if (!captured.apiVersion) captured.apiVersion = '1.0';
   console.log(`[一点万象] 捕获到候选参数：${Object.keys(captured).join(',')}`);
 
