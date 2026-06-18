@@ -27,23 +27,62 @@ function bodyToString(body) {
     if (typeof body.value === 'string') return body.value;
     if (body.bytes) return bodyToString(body.bytes);
     if (body.data) return bodyToString(body.data);
-    return Object.keys(body).map(k => `${encodeURIComponent(k)}=${encodeURIComponent(body[k])}`).join('&');
+    return '';
   }
 
   return String(body);
 }
 
-function parseForm(input) {
+function mergeObject(out, obj) {
+  Object.keys(obj || {}).forEach(k => {
+    const v = obj[k];
+    if (v === undefined || v === null) return;
+    if (typeof v === 'object') {
+      if (k === 'body' || k === 'data' || k === 'params' || k === 'form') mergeObject(out, v);
+      else out[k] = JSON.stringify(v);
+      return;
+    }
+    out[k] = String(v);
+  });
+}
+
+function parseKeyValueString(str) {
   const out = {};
-  const str = bodyToString(input);
   if (!str) return out;
+  const trimmed = str.trim();
+
+  if (trimmed.startsWith('{')) {
+    try {
+      mergeObject(out, JSON.parse(trimmed));
+      return out;
+    } catch (e) {}
+  }
+
   str.split('&').forEach(kv => {
     const i = kv.indexOf('=');
     if (i < 0) return;
-    const k = kv.substring(0, i);
-    const v = kv.substring(i + 1);
-    try { out[k] = decodeURIComponent(v); } catch (e) { out[k] = v; }
+    const rawK = kv.substring(0, i);
+    const rawV = kv.substring(i + 1);
+    let k = rawK;
+    let v = rawV;
+    try { k = decodeURIComponent(rawK.replace(/\+/g, ' ')); } catch (e) {}
+    try { v = decodeURIComponent(rawV.replace(/\+/g, ' ')); } catch (e) {}
+    out[k] = v;
   });
+  return out;
+}
+
+function parseForm(input, reqUrl) {
+  const out = {};
+  if (input && typeof input === 'object' && !(input instanceof ArrayBuffer) && !ArrayBuffer.isView(input)) {
+    mergeObject(out, input);
+  }
+
+  const str = bodyToString(input);
+  mergeObject(out, parseKeyValueString(str));
+
+  const query = (reqUrl.split('?')[1] || '').split('#')[0];
+  mergeObject(out, parseKeyValueString(query));
   return out;
 }
 
@@ -63,8 +102,12 @@ export default async function (ctx) {
   if (!reqUrl || reqUrl.indexOf('/mixc/gateway') < 0) return;
 
   const reqBody = ctx.request?.body ?? ctx.request?.bodyBytes ?? ctx.request?.rawBody ?? '';
-  const form = parseForm(reqBody);
-  if (form.platform !== 'h5' || !form.token || !form.deviceParams) return;
+  const form = parseForm(reqBody, reqUrl);
+  if (form.platform !== 'h5' || !form.token || !form.deviceParams) {
+    const bodyType = reqBody && reqBody.constructor ? reqBody.constructor.name : typeof reqBody;
+    console.log(`[一点万象] 当前请求缺少关键字段，跳过。bodyType=${bodyType} keys=${Object.keys(form).slice(0, 12).join(',')}`);
+    return;
+  }
 
   const now = Date.now();
   const lockKey = `lock_timestamp_${SITE_KEY}`;
