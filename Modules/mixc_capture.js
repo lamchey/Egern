@@ -14,6 +14,7 @@ const CAPTURE_REQUIRED_FIELDS = ['token', 'deviceParams'];
 const COMPLETE_FIELDS = ['token', 'deviceParams', 'mallNo'];
 const COMPARE_FIELDS = [...KEEP_FIELDS, 'apiVersion', 'capturePlatform', 'captureAction', 'captureHasT', 'captureSignCheck'];
 const SIGN_SECRET = 'P@Gkbu0shTNHjhM!7F';
+const SIGN_ACTION = 'mixc.app.memberSign.sign';
 const KEEP_FIELD_MAP = KEEP_FIELDS.reduce((m, k) => {
   m[k.toLowerCase()] = k;
   return m;
@@ -224,6 +225,11 @@ export default async function (ctx) {
     `[一点万象] gateway 候选：platform=${capturePlatform || '-'} action=${form.action || '-'} ` +
     `hasT=${form.t !== undefined ? 'yes' : 'no'} signCheck=${signCheck.available ? (signCheck.ok ? 'ok' : 'mismatch') : 'none'}`
   );
+
+  if (capturePlatform.toLowerCase() !== 'h5' && form.action !== SIGN_ACTION) {
+    console.log(`[一点万象] native gateway 非签到 action，跳过保存，避免污染 Gist。action=${form.action || '-'}`);
+    return;
+  }
 
   const now = Date.now();
   const lockKey = `lock_timestamp_${SITE_KEY}`;
