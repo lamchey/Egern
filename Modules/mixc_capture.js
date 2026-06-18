@@ -11,8 +11,31 @@ import CryptoJS from 'https://esm.sh/crypto-js';
 
 const KEEP_FIELDS = ['X-Mixc-Swimlane', 'appId', 'appVersion', 'deviceParams', 'imei', 'mallNo', 'osVersion', 'params', 'platform', 'token'];
 
-function parseForm(str) {
+function bodyToString(body) {
+  if (!body) return '';
+  if (typeof body === 'string') return body;
+
+  try {
+    if (body instanceof ArrayBuffer) return new TextDecoder('utf-8').decode(body);
+    if (ArrayBuffer.isView(body)) return new TextDecoder('utf-8').decode(body);
+  } catch (e) {}
+
+  if (typeof body === 'object') {
+    if (typeof body.text === 'string') return body.text;
+    if (typeof body.raw === 'string') return body.raw;
+    if (typeof body.body === 'string') return body.body;
+    if (typeof body.value === 'string') return body.value;
+    if (body.bytes) return bodyToString(body.bytes);
+    if (body.data) return bodyToString(body.data);
+    return Object.keys(body).map(k => `${encodeURIComponent(k)}=${encodeURIComponent(body[k])}`).join('&');
+  }
+
+  return String(body);
+}
+
+function parseForm(input) {
   const out = {};
+  const str = bodyToString(input);
   if (!str) return out;
   str.split('&').forEach(kv => {
     const i = kv.indexOf('=');
@@ -39,7 +62,8 @@ export default async function (ctx) {
   const reqUrl = ctx.request?.url || '';
   if (!reqUrl || reqUrl.indexOf('/mixc/gateway') < 0) return;
 
-  const form = parseForm(ctx.request?.body || '');
+  const reqBody = ctx.request?.body ?? ctx.request?.bodyBytes ?? ctx.request?.rawBody ?? '';
+  const form = parseForm(reqBody);
   if (form.platform !== 'h5' || !form.token || !form.deviceParams) return;
 
   const now = Date.now();
