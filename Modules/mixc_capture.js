@@ -10,9 +10,9 @@
 import CryptoJS from 'https://esm.sh/crypto-js';
 
 const KEEP_FIELDS = ['X-Mixc-Swimlane', 'appId', 'appVersion', 'deviceParams', 'imei', 'mallNo', 'osVersion', 'params', 'platform', 'token'];
-const REQUIRED_FIELDS = ['token', 'deviceParams', 'mallNo'];
-const COMPARE_FIELDS = [...KEEP_FIELDS, 'apiVersion', 'captureAction', 'captureSignCheck'];
-const SIGN_SECRET = 'P@Gkbu0shTNHjhM!7F';
+const CAPTURE_REQUIRED_FIELDS = ['token', 'deviceParams'];
+const COMPLETE_FIELDS = ['token', 'deviceParams', 'mallNo'];
+const COMPARE_FIELDS = [...KEEP_FIELDS, 'apiVersion'];
 const KEEP_FIELD_MAP = KEEP_FIELDS.reduce((m, k) => {
   m[k.toLowerCase()] = k;
   return m;
@@ -24,34 +24,6 @@ function canonicalField(k) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function calcSign(p) {
-  const keys = Object.keys(p || {}).filter(k => k !== 'sign').sort();
-  let t = '';
-  for (const k of keys) {
-    const v = p[k];
-    if (v || v === 0 || v === '') t += `${k}=${v}&`;
-  }
-  return CryptoJS.MD5(t + SIGN_SECRET).toString();
-}
-
-function verifyCapturedSign(form) {
-  if (!form || !form.sign) return { available: false };
-  const signInput = {};
-  Object.keys(form).forEach(k => {
-    if (k === 'sign') return;
-    const v = form[k];
-    if (v === undefined || v === null) return;
-    signInput[k] = String(v);
-  });
-  const expected = calcSign(signInput);
-  return {
-    available: true,
-    ok: expected === String(form.sign),
-    expected,
-    actual: String(form.sign),
-  };
 }
 
 function fieldSnapshot(obj) {
@@ -115,39 +87,6 @@ function mergeObject(out, obj) {
   });
 }
 
-function tryParseJson(value) {
-  if (typeof value !== 'string') return null;
-  const s = value.trim();
-  if (!s || (!s.startsWith('{') && !s.startsWith('['))) return null;
-  try { return JSON.parse(s); } catch (e) { return null; }
-}
-
-function collectKeepFields(out, value, depth = 0) {
-  if (depth > 6 || value === undefined || value === null) return;
-
-  const parsed = tryParseJson(value);
-  if (parsed) {
-    collectKeepFields(out, parsed, depth + 1);
-    return;
-  }
-
-  if (Array.isArray(value)) {
-    value.forEach(item => collectKeepFields(out, item, depth + 1));
-    return;
-  }
-
-  if (typeof value !== 'object') return;
-
-  Object.keys(value).forEach(k => {
-    const v = value[k];
-    const key = canonicalField(k);
-    if (KEEP_FIELDS.includes(key) && v !== undefined && v !== null && out[key] === undefined) {
-      out[key] = typeof v === 'object' ? JSON.stringify(v) : String(v);
-    }
-    collectKeepFields(out, v, depth + 1);
-  });
-}
-
 function parseKeyValueString(str) {
   const out = {};
   if (!str) return out;
@@ -174,7 +113,7 @@ function parseKeyValueString(str) {
   return out;
 }
 
-async function parseForm(input, reqUrl) {
+async function parseForm(input) {
   const out = {};
   if (input && typeof input === 'object' && !(input instanceof ArrayBuffer) && !ArrayBuffer.isView(input)) {
     mergeObject(out, input);
@@ -182,10 +121,6 @@ async function parseForm(input, reqUrl) {
 
   const str = await bodyToString(input);
   mergeObject(out, parseKeyValueString(str));
-
-  const query = (reqUrl.split('?')[1] || '').split('#')[0];
-  mergeObject(out, parseKeyValueString(query));
-  collectKeepFields(out, out);
   return out;
 }
 
@@ -212,35 +147,18 @@ export default async function (ctx) {
   }
 
   const reqBody = ctx.request?.body ?? ctx.request?.bodyBytes ?? ctx.request?.rawBody ?? '';
-  const bodyForm = await parseForm(reqBody, reqUrl);
-  const form = { ...bodyForm };
-  mergeObject(form, ctx.request?.headers || {});
-  const hasAnyUsefulField = KEEP_FIELDS.some(k => form[k] !== undefined);
-  if (!hasAnyUsefulField) return;
+  const form = await parseForm(reqBody);
 
   const platform = String(form.platform || '').toLowerCase();
   if (platform !== 'h5') {
-    console.log(`[一点万象] 非 h5 gateway 请求，跳过。platform=${form.platform || '-'} keys=${Object.keys(form).join(',')}`);
+    console.log(`[一点万象] 非 h5 gateway 请求体，跳过。platform=${form.platform || '-'} keys=${Object.keys(form).join(',')}`);
     return;
   }
 
-  const missingNow = REQUIRED_FIELDS.filter(k => !form[k]);
+  const missingNow = CAPTURE_REQUIRED_FIELDS.filter(k => !form[k]);
   if (missingNow.length) {
-    console.log(`[一点万象] h5 gateway 请求缺少关键字段，跳过。missing=${missingNow.join(',')} keys=${Object.keys(form).join(',')}`);
+    console.log(`[一点万象] h5 gateway 请求体缺少 QX 抓包关键字段，跳过。missing=${missingNow.join(',')} keys=${Object.keys(form).join(',')}`);
     return;
-  }
-
-  const signCheck = verifyCapturedSign(bodyForm);
-  if (signCheck.available) {
-    console.log(`[一点万象] 捕获请求签名自检：${signCheck.ok ? '通过' : '不匹配'} action=${form.action || '-'}`);
-    if (!signCheck.ok) {
-      ctx.notify({
-        title: '一点万象抓包异常',
-        body: '⚠️ 捕获请求签名自检失败，当前签名算法可能已变化，已跳过保存',
-        sound: false,
-      });
-      return;
-    }
   }
 
   const now = Date.now();
@@ -262,8 +180,6 @@ export default async function (ctx) {
   KEEP_FIELDS.forEach(k => { if (form[k] !== undefined) captured[k] = form[k]; });
   captured.platform = 'h5';
   if (!captured.apiVersion) captured.apiVersion = '1.0';
-  if (form.action) captured.captureAction = form.action;
-  if (signCheck.available) captured.captureSignCheck = signCheck.ok ? 'ok' : 'mismatch';
   console.log(`[一点万象] 捕获到候选参数：${Object.keys(captured).join(',')}`);
 
   console.log('[一点万象] 开始拉取并合并 Gist 数据...');
@@ -322,7 +238,7 @@ export default async function (ctx) {
   if (!saved.appId)      saved.appId = '68a91a5bac6a4f3e91bf4b42856785c6';
   if (!saved.platform)   saved.platform = 'h5';
   if (!saved.apiVersion) saved.apiVersion = '1.0';
-  const missing = REQUIRED_FIELDS.filter(k => !saved[k]);
+  const missing = COMPLETE_FIELDS.filter(k => !saved[k]);
   const complete = missing.length === 0;
   const changed = fieldSnapshot(prevSaved) !== fieldSnapshot(saved);
 
