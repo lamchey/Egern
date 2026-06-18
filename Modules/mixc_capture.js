@@ -11,6 +11,7 @@ import CryptoJS from 'https://esm.sh/crypto-js';
 
 const KEEP_FIELDS = ['X-Mixc-Swimlane', 'appId', 'appVersion', 'deviceParams', 'imei', 'mallNo', 'osVersion', 'params', 'platform', 'token'];
 const REQUIRED_FIELDS = ['token', 'deviceParams', 'mallNo'];
+const COMPARE_FIELDS = [...KEEP_FIELDS, 'apiVersion', 'capturePlatform'];
 const KEEP_FIELD_MAP = KEEP_FIELDS.reduce((m, k) => {
   m[k.toLowerCase()] = k;
   return m;
@@ -18,6 +19,18 @@ const KEEP_FIELD_MAP = KEEP_FIELDS.reduce((m, k) => {
 
 function canonicalField(k) {
   return KEEP_FIELD_MAP[String(k || '').toLowerCase()] || k;
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function fieldSnapshot(obj) {
+  const out = {};
+  COMPARE_FIELDS.forEach(k => {
+    if (obj && obj[k] !== undefined && obj[k] !== null) out[k] = String(obj[k]);
+  });
+  return JSON.stringify(out);
 }
 
 async function streamToString(stream) {
@@ -253,7 +266,12 @@ export default async function (ctx) {
   if (!saved.apiVersion) saved.apiVersion = '1.0';
   const missing = REQUIRED_FIELDS.filter(k => !saved[k]);
   const complete = missing.length === 0;
-  const changed = !prevSaved || prevSaved.token !== saved.token || prevSaved.mallNo !== saved.mallNo || prevSaved.deviceParams !== saved.deviceParams;
+  const changed = fieldSnapshot(prevSaved) !== fieldSnapshot(saved);
+
+  if (!changed) {
+    console.log('[一点万象] 参数未变化，跳过 Gist 上传');
+    return;
+  }
 
   existing[SITE_KEY] = {
     cookie:     JSON.stringify(saved),
@@ -261,21 +279,41 @@ export default async function (ctx) {
     source_url: reqUrl,
   };
 
-  const encryptedContent = CryptoJS.AES.encrypt(JSON.stringify(existing, null, 2), GIST_SECRET).toString();
+  let encryptedContent = CryptoJS.AES.encrypt(JSON.stringify(existing, null, 2), GIST_SECRET).toString();
 
   try {
-    const patchResp = await ctx.http.patch(`https://api.github.com/gists/${GIST_ID}`, {
-      headers: { ...GH_HEADERS, 'Content-Type': 'application/json' },
-      body: { files: { [GIST_FILE]: { content: encryptedContent } } },
-      timeout: 15000,
-    });
+    let patchResp;
+    for (let i = 0; i < 3; i++) {
+      patchResp = await ctx.http.patch(`https://api.github.com/gists/${GIST_ID}`, {
+        headers: { ...GH_HEADERS, 'Content-Type': 'application/json' },
+        body: { files: { [GIST_FILE]: { content: encryptedContent } } },
+        timeout: 15000,
+      });
+      if (patchResp.status !== 409) break;
+      console.log(`[一点万象] Gist 写入冲突 HTTP 409，${i + 1}/3 重试`);
+      await sleep(800 + i * 700);
+
+      const retryGetResp = await ctx.http.get(`https://api.github.com/gists/${GIST_ID}`, { headers: GH_HEADERS, timeout: 15000 });
+      if (retryGetResp.status === 200) {
+        const retryGistData = await retryGetResp.json();
+        const retryContent = retryGistData?.files?.[GIST_FILE]?.content || '';
+        let retryExisting = {};
+        if (retryContent.trim()) {
+          const bytes = CryptoJS.AES.decrypt(retryContent.trim(), GIST_SECRET);
+          const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
+          if (decryptedStr) retryExisting = JSON.parse(decryptedStr);
+        }
+        retryExisting[SITE_KEY] = existing[SITE_KEY];
+        encryptedContent = CryptoJS.AES.encrypt(JSON.stringify(retryExisting, null, 2), GIST_SECRET).toString();
+      }
+    }
 
     if (patchResp.status === 200) {
       console.log('[一点万象] 加密同步成功 ✅');
       ctx.notify({
         title: '万象星签到',
         body: complete
-          ? (changed ? '参数已更新 ✅' : '参数已捕获 ✅') + `\n商场 ${saved.mallNo || '-'} · 可用于签到`
+          ? `参数已更新 ✅\n商场 ${saved.mallNo || '-'} · 可用于签到`
           : `已保存部分参数 ⚠️\n缺少 ${missing.join(', ')}，继续进入签到页抓取`,
         sound: false,
       });
