@@ -87,6 +87,9 @@ function parseForm(input, reqUrl) {
 }
 
 export default async function (ctx) {
+  const reqUrl = ctx.request?.url || '';
+  console.log(`[一点万象] 脚本已触发：${reqUrl || '无 URL'}`);
+
   const GIST_ID     = ctx.env.GIST_ID     || '';
   const GIST_TOKEN  = ctx.env.GIST_TOKEN  || '';
   const GIST_FILE   = ctx.env.GIST_FILE   || '';
@@ -98,7 +101,6 @@ export default async function (ctx) {
     return;
   }
 
-  const reqUrl = ctx.request?.url || '';
   if (!reqUrl || reqUrl.indexOf('/mixc/gateway') < 0) return;
 
   const reqBody = ctx.request?.body ?? ctx.request?.bodyBytes ?? ctx.request?.rawBody ?? '';
