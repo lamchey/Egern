@@ -10,6 +10,15 @@
 import CryptoJS from 'https://esm.sh/crypto-js';
 
 const KEEP_FIELDS = ['X-Mixc-Swimlane', 'appId', 'appVersion', 'deviceParams', 'imei', 'mallNo', 'osVersion', 'params', 'platform', 'token'];
+const REQUIRED_FIELDS = ['token', 'deviceParams', 'mallNo'];
+const KEEP_FIELD_MAP = KEEP_FIELDS.reduce((m, k) => {
+  m[k.toLowerCase()] = k;
+  return m;
+}, {});
+
+function canonicalField(k) {
+  return KEEP_FIELD_MAP[String(k || '').toLowerCase()] || k;
+}
 
 async function streamToString(stream) {
   if (!stream || typeof stream.getReader !== 'function') return '';
@@ -54,12 +63,46 @@ function mergeObject(out, obj) {
   Object.keys(obj || {}).forEach(k => {
     const v = obj[k];
     if (v === undefined || v === null) return;
+    const key = canonicalField(k);
     if (typeof v === 'object') {
       if (k === 'body' || k === 'data' || k === 'params' || k === 'form') mergeObject(out, v);
-      else out[k] = JSON.stringify(v);
+      else out[key] = JSON.stringify(v);
       return;
     }
-    out[k] = String(v);
+    out[key] = String(v);
+  });
+}
+
+function tryParseJson(value) {
+  if (typeof value !== 'string') return null;
+  const s = value.trim();
+  if (!s || (!s.startsWith('{') && !s.startsWith('['))) return null;
+  try { return JSON.parse(s); } catch (e) { return null; }
+}
+
+function collectKeepFields(out, value, depth = 0) {
+  if (depth > 6 || value === undefined || value === null) return;
+
+  const parsed = tryParseJson(value);
+  if (parsed) {
+    collectKeepFields(out, parsed, depth + 1);
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach(item => collectKeepFields(out, item, depth + 1));
+    return;
+  }
+
+  if (typeof value !== 'object') return;
+
+  Object.keys(value).forEach(k => {
+    const v = value[k];
+    const key = canonicalField(k);
+    if (KEEP_FIELDS.includes(key) && v !== undefined && v !== null && out[key] === undefined) {
+      out[key] = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    }
+    collectKeepFields(out, v, depth + 1);
   });
 }
 
@@ -84,7 +127,7 @@ function parseKeyValueString(str) {
     let v = rawV;
     try { k = decodeURIComponent(rawK.replace(/\+/g, ' ')); } catch (e) {}
     try { v = decodeURIComponent(rawV.replace(/\+/g, ' ')); } catch (e) {}
-    out[k] = v;
+    out[canonicalField(k)] = v;
   });
   return out;
 }
@@ -100,6 +143,7 @@ async function parseForm(input, reqUrl) {
 
   const query = (reqUrl.split('?')[1] || '').split('#')[0];
   mergeObject(out, parseKeyValueString(query));
+  collectKeepFields(out, out);
   return out;
 }
 
@@ -123,14 +167,16 @@ export default async function (ctx) {
 
   const reqBody = ctx.request?.body ?? ctx.request?.bodyBytes ?? ctx.request?.rawBody ?? '';
   const form = await parseForm(reqBody, reqUrl);
-  if (form.platform !== 'h5' || !form.token || !form.deviceParams) {
+  mergeObject(form, ctx.request?.headers || {});
+  if (form.platform && form.platform !== 'h5') {
     const bodyType = reqBody && reqBody.constructor ? reqBody.constructor.name : typeof reqBody;
     const keys = Object.keys(form).slice(0, 20).join(',');
-    if (isGateway || keys.includes('token') || keys.includes('deviceParams') || keys.includes('mallNo')) {
-      console.log(`[一点万象] 当前请求缺少签到关键字段，跳过。url=${reqUrl} bodyType=${bodyType} keys=${keys}`);
-    }
+    console.log(`[一点万象] 非 h5 请求，跳过。url=${reqUrl} bodyType=${bodyType} keys=${keys}`);
     return;
   }
+
+  const hasAnyUsefulField = KEEP_FIELDS.some(k => form[k] !== undefined);
+  if (!hasAnyUsefulField) return;
 
   const now = Date.now();
   const lockKey = `lock_timestamp_${SITE_KEY}`;
@@ -147,13 +193,15 @@ export default async function (ctx) {
   }
   try { await ctx.store.set(lockKey, String(now)); } catch (e) {}
 
-  const saved = {};
-  KEEP_FIELDS.forEach(k => { if (form[k] !== undefined) saved[k] = form[k]; });
-  if (!saved.appId)      saved.appId = '68a91a5bac6a4f3e91bf4b42856785c6';
-  if (!saved.platform)   saved.platform = 'h5';
-  if (!saved.apiVersion) saved.apiVersion = '1.0';
+  const captured = {};
+  KEEP_FIELDS.forEach(k => { if (form[k] !== undefined) captured[k] = form[k]; });
+  if (!captured.platform) captured.platform = 'h5';
+  if (!captured.apiVersion) captured.apiVersion = '1.0';
+  console.log(`[一点万象] 捕获到候选参数：${Object.keys(captured).join(',')}`);
 
-  console.log('[一点万象] 捕获到有效签到参数，开始拉取并合并 Gist 数据...');
+  if (!captured.token && !captured.mallNo && !captured.deviceParams) return;
+
+  console.log('[一点万象] 开始拉取并合并 Gist 数据...');
 
   const GH_HEADERS = {
     'Authorization': `Bearer ${GIST_TOKEN}`,
@@ -200,11 +248,18 @@ export default async function (ctx) {
   }
 
   const prevNode = existing[SITE_KEY];
-  let prevSaved = null;
+  let prevSaved = {};
   if (prevNode && prevNode.cookie) {
     try { prevSaved = JSON.parse(prevNode.cookie); } catch (e) {}
   }
-  const changed = !prevSaved || prevSaved.token !== saved.token || prevSaved.mallNo !== saved.mallNo;
+
+  const saved = { ...prevSaved, ...captured };
+  if (!saved.appId)      saved.appId = '68a91a5bac6a4f3e91bf4b42856785c6';
+  if (!saved.platform)   saved.platform = 'h5';
+  if (!saved.apiVersion) saved.apiVersion = '1.0';
+  const missing = REQUIRED_FIELDS.filter(k => !saved[k]);
+  const complete = missing.length === 0;
+  const changed = !prevSaved || prevSaved.token !== saved.token || prevSaved.mallNo !== saved.mallNo || prevSaved.deviceParams !== saved.deviceParams;
 
   existing[SITE_KEY] = {
     cookie:     JSON.stringify(saved),
@@ -225,7 +280,9 @@ export default async function (ctx) {
       console.log('[一点万象] 加密同步成功 ✅');
       ctx.notify({
         title: '万象星签到',
-        body: (changed ? '参数已更新 ✅' : '参数已捕获 ✅') + `\n商场 ${saved.mallNo} · token 已加密同步`,
+        body: complete
+          ? (changed ? '参数已更新 ✅' : '参数已捕获 ✅') + `\n商场 ${saved.mallNo || '-'} · 可用于签到`
+          : `已保存部分参数 ⚠️\n缺少 ${missing.join(', ')}，继续进入签到页抓取`,
         sound: false,
       });
     } else {
