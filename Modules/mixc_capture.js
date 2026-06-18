@@ -11,9 +11,26 @@ import CryptoJS from 'https://esm.sh/crypto-js';
 
 const KEEP_FIELDS = ['X-Mixc-Swimlane', 'appId', 'appVersion', 'deviceParams', 'imei', 'mallNo', 'osVersion', 'params', 'platform', 'token'];
 
-function bodyToString(body) {
+async function streamToString(stream) {
+  if (!stream || typeof stream.getReader !== 'function') return '';
+  const reader = stream.getReader();
+  const chunks = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (typeof value === 'string') {
+      chunks.push(value);
+    } else if (value) {
+      chunks.push(new TextDecoder('utf-8').decode(value));
+    }
+  }
+  return chunks.join('');
+}
+
+async function bodyToString(body) {
   if (!body) return '';
   if (typeof body === 'string') return body;
+  if (typeof body.getReader === 'function') return streamToString(body);
 
   try {
     if (body instanceof ArrayBuffer) return new TextDecoder('utf-8').decode(body);
@@ -25,8 +42,8 @@ function bodyToString(body) {
     if (typeof body.raw === 'string') return body.raw;
     if (typeof body.body === 'string') return body.body;
     if (typeof body.value === 'string') return body.value;
-    if (body.bytes) return bodyToString(body.bytes);
-    if (body.data) return bodyToString(body.data);
+    if (body.bytes) return await bodyToString(body.bytes);
+    if (body.data) return await bodyToString(body.data);
     return '';
   }
 
@@ -72,13 +89,13 @@ function parseKeyValueString(str) {
   return out;
 }
 
-function parseForm(input, reqUrl) {
+async function parseForm(input, reqUrl) {
   const out = {};
   if (input && typeof input === 'object' && !(input instanceof ArrayBuffer) && !ArrayBuffer.isView(input)) {
     mergeObject(out, input);
   }
 
-  const str = bodyToString(input);
+  const str = await bodyToString(input);
   mergeObject(out, parseKeyValueString(str));
 
   const query = (reqUrl.split('?')[1] || '').split('#')[0];
@@ -88,7 +105,8 @@ function parseForm(input, reqUrl) {
 
 export default async function (ctx) {
   const reqUrl = ctx.request?.url || '';
-  console.log(`[一点万象] 脚本已触发：${reqUrl || '无 URL'}`);
+  const isGateway = reqUrl.indexOf('/mixc/gateway') >= 0;
+  console.log(`[一点万象] 脚本已触发${isGateway ? '（gateway）' : ''}：${reqUrl || '无 URL'}`);
 
   const GIST_ID     = ctx.env.GIST_ID     || '';
   const GIST_TOKEN  = ctx.env.GIST_TOKEN  || '';
@@ -104,10 +122,13 @@ export default async function (ctx) {
   if (!reqUrl) return;
 
   const reqBody = ctx.request?.body ?? ctx.request?.bodyBytes ?? ctx.request?.rawBody ?? '';
-  const form = parseForm(reqBody, reqUrl);
+  const form = await parseForm(reqBody, reqUrl);
   if (form.platform !== 'h5' || !form.token || !form.deviceParams) {
     const bodyType = reqBody && reqBody.constructor ? reqBody.constructor.name : typeof reqBody;
-    console.log(`[一点万象] 当前请求缺少签到关键字段，跳过。url=${reqUrl} bodyType=${bodyType} keys=${Object.keys(form).slice(0, 20).join(',')}`);
+    const keys = Object.keys(form).slice(0, 20).join(',');
+    if (isGateway || keys.includes('token') || keys.includes('deviceParams') || keys.includes('mallNo')) {
+      console.log(`[一点万象] 当前请求缺少签到关键字段，跳过。url=${reqUrl} bodyType=${bodyType} keys=${keys}`);
+    }
     return;
   }
 
