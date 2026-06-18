@@ -73,6 +73,56 @@ async function bodyToString(body) {
   return String(body);
 }
 
+async function readRequestBodyText(ctx) {
+  const req = ctx.request || {};
+  let lastError = '';
+
+  if (typeof req.text === 'function') {
+    try {
+      const text = await req.text();
+      if (text) return { text, source: 'ctx.request.text()' };
+    } catch (e) {
+      lastError = `ctx.request.text(): ${e.message}`;
+    }
+  }
+
+  const candidates = [
+    ['ctx.request.body', req.body],
+    ['ctx.request.bodyBytes', req.bodyBytes],
+    ['ctx.request.rawBody', req.rawBody],
+  ];
+  for (const [source, value] of candidates) {
+    try {
+      const text = await bodyToString(value);
+      if (text) return { text, source };
+    } catch (e) {
+      lastError = `${source}: ${e.message}`;
+    }
+  }
+
+  return { text: '', source: lastError || 'empty' };
+}
+
+function headerValue(headers, name) {
+  if (!headers) return '';
+  try {
+    if (typeof headers.get === 'function') return headers.get(name) || '';
+  } catch (e) {}
+  return headers[name] || headers[name.toLowerCase()] || '';
+}
+
+async function storageGet(ctx, key) {
+  const store = ctx.store || ctx.storage;
+  if (!store || typeof store.get !== 'function') return null;
+  return await store.get(key);
+}
+
+async function storageSet(ctx, key, value) {
+  const store = ctx.store || ctx.storage;
+  if (!store || typeof store.set !== 'function') return;
+  await store.set(key, value);
+}
+
 function mergeObject(out, obj) {
   Object.keys(obj || {}).forEach(k => {
     const v = obj[k];
@@ -113,17 +163,6 @@ function parseKeyValueString(str) {
   return out;
 }
 
-async function parseForm(input) {
-  const out = {};
-  if (input && typeof input === 'object' && !(input instanceof ArrayBuffer) && !ArrayBuffer.isView(input)) {
-    mergeObject(out, input);
-  }
-
-  const str = await bodyToString(input);
-  mergeObject(out, parseKeyValueString(str));
-  return out;
-}
-
 export default async function (ctx) {
   const reqUrl = ctx.request?.url || '';
   const isGateway = reqUrl.indexOf('/mixc/gateway') >= 0;
@@ -146,8 +185,12 @@ export default async function (ctx) {
     return;
   }
 
-  const reqBody = ctx.request?.body ?? ctx.request?.bodyBytes ?? ctx.request?.rawBody ?? '';
-  const form = await parseForm(reqBody);
+  const bodyRead = await readRequestBodyText(ctx);
+  const form = parseKeyValueString(bodyRead.text);
+  console.log(
+    `[一点万象] gateway body 读取：source=${bodyRead.source} len=${bodyRead.text.length} ` +
+    `content-type=${headerValue(ctx.request?.headers, 'content-type') || '-'} keys=${Object.keys(form).join(',') || '-'}`
+  );
 
   const platform = String(form.platform || '').toLowerCase();
   if (platform !== 'h5') {
@@ -166,7 +209,7 @@ export default async function (ctx) {
 
   let lastRunTime = 0;
   try {
-    const stored = await ctx.store.get(lockKey);
+    const stored = await storageGet(ctx, lockKey);
     if (stored) lastRunTime = parseInt(stored, 10);
   } catch (e) {}
 
@@ -174,7 +217,7 @@ export default async function (ctx) {
     console.log(`[一点万象] 拦截到高频连发请求，距离上次处理仅 ${now - lastRunTime}ms，跳过本次回写以防 409 冲突。`);
     return;
   }
-  try { await ctx.store.set(lockKey, String(now)); } catch (e) {}
+  try { await storageSet(ctx, lockKey, String(now)); } catch (e) {}
 
   const captured = {};
   KEEP_FIELDS.forEach(k => { if (form[k] !== undefined) captured[k] = form[k]; });
@@ -210,7 +253,7 @@ export default async function (ctx) {
             // 解密失败时中止，防止用空对象覆盖其他站点已有节点
             console.log('[一点万象] 解密历史密文失败，终止同步以保护数据: ' + e.message);
             ctx.notify({ title: '同步被拦截', body: '⚠️ Gist 解密历史密文失败！' });
-            try { await ctx.store.set(lockKey, '0'); } catch (el) {}
+            try { await storageSet(ctx, lockKey, '0'); } catch (el) {}
             return;
           }
         }
@@ -218,13 +261,13 @@ export default async function (ctx) {
     } else {
       console.log(`[一点万象] 读取 Gist 失败，HTTP ${getResp.status}，终止同步`);
       ctx.notify({ title: '一点万象同步被中止', body: `⚠️ 读取 Gist 失败 HTTP ${getResp.status}` });
-      try { await ctx.store.set(lockKey, '0'); } catch (el) {}
+      try { await storageSet(ctx, lockKey, '0'); } catch (el) {}
       return;
     }
   } catch (e) {
     console.log('[一点万象] 网络异常，无法读取 Gist，终止同步: ' + e.message);
     ctx.notify({ title: '一点万象同步被中止', body: '⚠️ 网络异常，无法读取历史数据' });
-    try { await ctx.store.set(lockKey, '0'); } catch (el) {}
+    try { await storageSet(ctx, lockKey, '0'); } catch (el) {}
     return;
   }
 
@@ -295,7 +338,7 @@ export default async function (ctx) {
       ctx.notify({ title: '一点万象同步失败', body: `HTTP ${patchResp.status}` });
     }
   } catch (e) {
-    try { await ctx.store.set(lockKey, '0'); } catch (el) {}
+    try { await storageSet(ctx, lockKey, '0'); } catch (el) {}
     console.log('[一点万象] 上传发生异常: ' + e.message);
     ctx.notify({ title: '一点万象同步异常', body: e.message });
   }
