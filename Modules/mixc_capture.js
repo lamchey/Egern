@@ -101,13 +101,13 @@ export default async function (ctx) {
     return;
   }
 
-  if (!reqUrl || reqUrl.indexOf('/mixc/gateway') < 0) return;
+  if (!reqUrl) return;
 
   const reqBody = ctx.request?.body ?? ctx.request?.bodyBytes ?? ctx.request?.rawBody ?? '';
   const form = parseForm(reqBody, reqUrl);
-  if (form.platform !== 'h5' || !form.token || !form.deviceParams) {
+  if (!form.token || !form.deviceParams || !form.mallNo) {
     const bodyType = reqBody && reqBody.constructor ? reqBody.constructor.name : typeof reqBody;
-    console.log(`[一点万象] 当前请求缺少关键字段，跳过。bodyType=${bodyType} keys=${Object.keys(form).slice(0, 12).join(',')}`);
+    console.log(`[一点万象] 当前请求缺少签到关键字段，跳过。url=${reqUrl} bodyType=${bodyType} keys=${Object.keys(form).slice(0, 20).join(',')}`);
     return;
   }
 
