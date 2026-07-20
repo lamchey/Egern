@@ -40,13 +40,13 @@ mitm:
 
 scriptings:
   - http_request:
-      name: Checkin Unified Capture
+      name: Checkin Capture
       match: ^https:\/\/(www\.nodeseek\.com\/setting|api\.pingmeapp\.net\/app\/queryBalanceAndBonus|www\.v2ex\.com\/(member|mission)|api\.tuhu\.cn\/User\/(GetMemberSignInInfoAsync|GetRightsList|GetUserCurrentAndNextGradeInfo)|user-api-prd-mx\.wandafilm\.com\/user\/user_info|m\.xiaomiyoupin\.com\/mtop\/act\/redPacketSign\/getActInfo|shop-api\.retail\.mi\.com\/mtop\/mf\/act\/infinite\/(do|done)|superapp-public\.kiwa-tech\.com\/activity\/wxapp\/signin\/(query|querySite|querySwitch|queryFragment|signin))(?:[\/?#]|$)
       script_url: ./capture.js
       timeout: 30
       body_required: false
   - http_request:
-      name: Checkin Unified Capture Body
+      name: Checkin Capture Body
       match: ^https:\/\/(app\.mixcapp\.com\/mixc\/gateway|cn-wxmall\.dreame\.tech\/main\/my\/info)(?:[\/?#]|$)
       script_url: ./capture.js
       timeout: 30
