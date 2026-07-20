@@ -1,10 +1,6 @@
 name: Checkin  Capture
 desc: Capture cookies or tokens for the checkin project and upload encrypted data to one Gist file.
 
-compat_arguments:
-  - apple
-  - egern
-
 env:
   GIST_ID: ""
   GIST_TOKEN: ""
