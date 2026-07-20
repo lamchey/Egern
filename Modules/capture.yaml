@@ -1,13 +1,6 @@
 name: Checkin  Capture
 desc: Capture cookies or tokens for the checkin project and upload encrypted data to one Gist file.
 
-env:
-  GIST_ID: ""
-  GIST_TOKEN: ""
-  GIST_FILE: "checkin_token.json"
-  GIST_SECRET: ""
-  ACCOUNT_ID: ""
-
 env_schema:
   GIST_ID:
     title: Gist ID
