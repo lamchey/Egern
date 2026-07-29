@@ -3,20 +3,27 @@ const COOKIE_KEY = "dmit.cookie.v1";
 function readHeader(headers, name) {
   if (!headers) return null;
   if (typeof headers.get === "function") return headers.get(name);
-  return headers[name] || headers[name.toLowerCase()] || null;
+  const expected = String(name).toLowerCase();
+  const key = Object.keys(headers).find(
+    (candidate) => candidate.toLowerCase() === expected,
+  );
+  return key ? headers[key] : null;
 }
 
 function isCaptureTarget(value) {
   try {
     const url = new URL(value);
+    if (url.protocol !== "https:" || url.hostname !== "www.dmit.io") return false;
+    if (
+      url.pathname === "/clientarea.php" ||
+      url.pathname === "/clientarea" ||
+      url.pathname.startsWith("/clientarea/")
+    ) {
+      return true;
+    }
     return (
-      url.protocol === "https:" &&
-      url.hostname === "www.dmit.io" &&
-      (
-        url.pathname === "/clientarea.php" ||
-        url.pathname === "/clientarea" ||
-        url.pathname.startsWith("/clientarea/")
-      )
+      url.pathname === "/index.php" &&
+      /^\/client-area(?:\/|$)/i.test(url.searchParams.get("rp") || "")
     );
   } catch (_) {
     return false;
@@ -51,6 +58,7 @@ export default async function main(ctx) {
   const previous = ctx.storage.get(COOKIE_KEY);
   if (previous === cookie) return;
 
+  // 只保存 Cookie 字符串，不保存 URL、请求体、服务 ID 或页面数据。
   ctx.storage.set(COOKIE_KEY, cookie);
   ctx.notify({
     title: "DMIT Cookie 已更新",
