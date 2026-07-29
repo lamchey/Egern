@@ -12,10 +12,6 @@ const DMIT = {
   friendlyServicesUrl: "https://www.dmit.io/index.php?rp=/client-area/services",
   clientareaServicesUrl: "https://www.dmit.io/clientarea/services",
   dashboardUrl: "https://www.dmit.io/clientarea.php",
-  userAgent:
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) " +
-    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 " +
-    "Mobile/15E148 Safari/604.1",
 };
 
 const DECIMAL_UNITS = {
@@ -83,12 +79,16 @@ function isDmitUrl(value) {
 function readHeader(headers, name) {
   if (!headers) return null;
   if (typeof headers.get === "function") return headers.get(name);
-  return headers[name] || headers[name.toLowerCase()] || null;
+  const expected = String(name).toLowerCase();
+  const key = Object.keys(headers).find(
+    (candidate) => candidate.toLowerCase() === expected,
+  );
+  return key ? headers[key] : null;
 }
 
 function toDmitUrl(value, base = DMIT.origin) {
   const url = new URL(value, base);
-  if (!isDmitUrl(url.href)) throw new Error("只允許請求 dmit.io 官方域名");
+  if (!isDmitUrl(url.href)) throw new Error("只允许请求 dmit.io 官方域名");
   return url.href;
 }
 
@@ -217,20 +217,29 @@ function daysUntil(dateString) {
 
 function normalizeBillingLabel(text) {
   const value = String(text || "");
-  if (/(?:雙向計費|双向计费|bidi|bidirectional)/i.test(value)) return "雙向計費";
+  if (/(?:雙向計費|双向计费|bidi|bidirectional)/i.test(value)) return "双向计费";
   if (/(?:出\s*\/\s*入取高值|max\s*\(\s*in\s*,\s*out\s*\))/i.test(value)) {
     return "出入取高";
   }
-  if (/(?:單向計費|单向计费|unidirectional)/i.test(value)) return "單向計費";
-  return "計費方式";
+  if (/(?:單向計費|单向计费|unidirectional)/i.test(value)) return "单向计费";
+  return "计费方式";
 }
 
 function normalizeOverageLabel(text) {
   const value = String(text || "");
   if (/(?:超量降速|降速|throttl|rate.?limit)/i.test(value)) return "超量降速";
-  if (/(?:超量暫停|超量暂停|suspend|paused?)/i.test(value)) return "超量暫停";
+  if (/(?:超量暫停|超量暂停|suspend|paused?)/i.test(value)) return "超量暂停";
   if (/(?:不限流量|unlimited)/i.test(value)) return "不限流量";
-  return "超量規則";
+  return "超量规则";
+}
+
+function normalizeDisplayData(data) {
+  if (!data) return data;
+  return {
+    ...data,
+    billingMode: normalizeBillingLabel(data.billingMode),
+    overagePolicy: normalizeOverageLabel(data.overagePolicy),
+  };
 }
 
 function trafficBlocks(text) {
@@ -449,11 +458,40 @@ function parseDmitTraffic(html) {
 
 function looksLoggedOut(html) {
   const text = String(html || "");
-  return (
-    /<input[^>]+type=["']password["']/i.test(text) ||
-    /name=["']loginform["']/i.test(text) ||
-    /(?:sign\s*in|log\s*in|登入|登录).{0,80}(?:password|密碼|密码)/i.test(visibleText(text))
-  );
+  for (const match of text.matchAll(/<form\b([^>]*)>([\s\S]*?)<\/form>/gi)) {
+    const attributes = match[1];
+    const inputs = [...match[2].matchAll(/<input\b[^>]*>/gi)].map(
+      (item) => item[0],
+    );
+    const hasPassword = inputs.some((input) =>
+      /\btype\s*=\s*(?:"password"|'password'|password)(?:\s|\/?>)/i.test(input),
+    );
+    if (!hasPassword) continue;
+
+    const hasIdentity = inputs.some(
+      (input) =>
+        /\btype\s*=\s*(?:"email"|'email'|email)(?:\s|\/?>)/i.test(input) ||
+        /\bname\s*=\s*(?:"(?:email|username)"|'(?:email|username)'|(?:email|username))(?:\s|\/?>)/i.test(
+          input,
+        ),
+    );
+    const hasLoginMarker =
+      /\b(?:name|id|class|action)\s*=\s*["'][^"']*(?:login|dologin)[^"']*["']/i.test(
+        attributes,
+      ) ||
+      inputs.some(
+        (input) =>
+          /\bname\s*=\s*(?:"action"|'action'|action)(?:\s|\/?>)/i.test(input) &&
+          /\bvalue\s*=\s*(?:"(?:login|dologin)"|'(?:login|dologin)'|(?:login|dologin))(?:\s|\/?>)/i.test(
+            input,
+          ),
+      );
+    const hasLoginText = /(?:sign\s*in|log\s*in|登入|登录)/i.test(
+      visibleText(match[0]),
+    );
+    if (hasLoginMarker || (hasIdentity && hasLoginText)) return true;
+  }
+  return false;
 }
 
 function looksLikeChallenge(html) {
@@ -504,34 +542,36 @@ async function requestDmit(ctx, url, cookie, referer = DMIT.dashboardUrl) {
   let currentUrl = toDmitUrl(url);
   let currentReferer = toDmitUrl(referer);
   let activeCookie = ctx.storage.get(STORAGE.cookie) || cookie;
-  const userAgent = env(ctx, "DMIT_USER_AGENT", DMIT.userAgent);
+  const storedCookie = activeCookie;
+  const userAgent = env(ctx, "DMIT_USER_AGENT", "").trim();
 
   for (let hop = 0; hop < 3; hop += 1) {
+    const headers = {
+      Accept: "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+      "Accept-Language": "zh-CN,zh;q=0.9,zh-TW;q=0.8,en;q=0.6",
+      Cookie: activeCookie,
+      Referer: currentReferer,
+    };
+    if (userAgent) headers["User-Agent"] = userAgent;
+
     const response = await ctx.http.get(currentUrl, {
-      headers: {
-        Accept: "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
-        "Accept-Language": "zh-TW,zh-CN;q=0.9,en;q=0.7",
-        Cookie: activeCookie,
-        Referer: currentReferer,
-        "User-Agent": userAgent,
-      },
+      headers,
       timeout: 15000,
       redirect: "manual",
-      credentials: "omit",
+      credentials: "include",
     });
 
     const rotatedCookie = mergeCookieHeader(activeCookie, setCookieHeaders(response.headers));
     if (rotatedCookie && rotatedCookie !== activeCookie) {
       activeCookie = rotatedCookie;
-      ctx.storage.set(STORAGE.cookie, activeCookie);
     }
 
     if (response.status >= 300 && response.status < 400) {
       const location = readHeader(response.headers, "location");
-      if (!location) throw new Error(`DMIT 返回 HTTP ${response.status}，但沒有跳轉地址`);
+      if (!location) throw new Error(`DMIT 返回 HTTP ${response.status}，但没有跳转地址`);
       const nextUrl = toDmitUrl(location, currentUrl);
       if (/(?:login|logout)/i.test(nextUrl)) {
-        throw new Error("DMIT Cookie 已失效，請重新登入並觸發抓包");
+        throw new Error("DMIT Cookie 已失效，请重新登录并触发抓包");
       }
       currentReferer = currentUrl;
       currentUrl = nextUrl;
@@ -539,28 +579,35 @@ async function requestDmit(ctx, url, cookie, referer = DMIT.dashboardUrl) {
     }
 
     const html = await response.text();
-    if (readHeader(response.headers, "cf-mitigated")) {
-      throw new Error("DMIT 觸發了 Cloudflare 驗證，請先在 Safari 完成驗證");
+    if (readHeader(response.headers, "cf-mitigated") || looksLikeChallenge(html)) {
+      throw new Error(
+        "DMIT 触发了 Cloudflare 验证，请先在 Safari 完成验证；如仍出现，请设置 DMIT_USER_AGENT",
+      );
     }
-    if (response.status === 401 || response.status === 403 || looksLoggedOut(html)) {
-      throw new Error("DMIT Cookie 已失效，請重新登入並觸發抓包");
+    if (looksLoggedOut(html) || response.status === 401) {
+      throw new Error("DMIT Cookie 已失效，请重新登录并触发抓包");
     }
-    if (looksLikeChallenge(html)) {
-      throw new Error("DMIT 觸發了 Cloudflare 驗證，請先在 Safari 完成驗證");
+    if (response.status === 403) {
+      throw new Error(
+        "DMIT 拒绝访问（HTTP 403），可能是 Cloudflare 验证或 User-Agent 不匹配",
+      );
     }
     if (response.status === 429) {
-      throw new Error("DMIT 請求過於頻繁，請稍後再試");
+      throw new Error("DMIT 请求过于频繁，请稍后再试");
     }
     if (response.status >= 500) {
-      throw new Error(`DMIT 服務暫時異常（HTTP ${response.status}）`);
+      throw new Error(`DMIT 服务暂时异常（HTTP ${response.status}）`);
     }
     if (response.status < 200 || response.status >= 300) {
       throw new Error(`DMIT 返回 HTTP ${response.status}`);
     }
+    if (activeCookie && activeCookie !== storedCookie) {
+      ctx.storage.set(STORAGE.cookie, activeCookie);
+    }
     return html;
   }
 
-  throw new Error("DMIT 頁面跳轉次數過多");
+  throw new Error("DMIT 页面跳转次数过多");
 }
 
 function embeddedJsonDocuments(html) {
@@ -767,7 +814,7 @@ function productLinks(html) {
 async function resolveProductUrl(ctx, cookie) {
   const serviceId = env(ctx, "DMIT_SERVICE_ID", "").trim();
   if (serviceId) {
-    if (!/^\d+$/.test(serviceId)) throw new Error("DMIT_SERVICE_ID 必須是純數字");
+    if (!/^\d+$/.test(serviceId)) throw new Error("DMIT_SERVICE_ID 必须是纯数字");
     return `${DMIT.origin}/clientarea.php?action=productdetails&id=${serviceId}`;
   }
 
@@ -784,25 +831,25 @@ async function resolveProductUrl(ctx, cookie) {
     const links = productLinks(html);
     if (links.length === 1) return links[0];
     if (links.length > 1) {
-      throw new Error("檢測到多台 VPS，請在腳本 Env 設定 DMIT_SERVICE_ID");
+      throw new Error("检测到多台 VPS，请在脚本环境变量中设置 DMIT_SERVICE_ID");
     }
 
     const traffic = parseDmitTraffic(html);
     if (traffic) return indexUrl;
   }
 
-  throw new Error("未找到 VPS 服務 ID；請在腳本 Env 設定 DMIT_SERVICE_ID");
+  throw new Error("未找到 VPS 服务编号；请在脚本环境变量中设置 DMIT_SERVICE_ID");
 }
 
 async function loadTraffic(ctx) {
   const cookie = ctx.storage.get(STORAGE.cookie);
-  if (!cookie) throw new Error("尚未抓到 Cookie，請先登入 DMIT 並打開客戶中心");
+  if (!cookie) throw new Error("尚未抓到 Cookie，请先登录 DMIT 并打开客户中心");
 
   const productUrl = await resolveProductUrl(ctx, cookie);
   const html = await requestDmit(ctx, productUrl, cookie, DMIT.servicesUrl);
   const traffic = parseDmitTraffic(html);
   if (!traffic) {
-    throw new Error("未能解析「每月流量」卡片，DMIT 頁面結構可能已更新");
+    throw new Error("未能解析“每月流量”卡片，DMIT 页面结构可能已更新");
   }
 
   const data = { ...traffic, productUrl };
@@ -962,7 +1009,7 @@ function valuesRow(data, compact = false) {
         children: [
           {
             type: "text",
-            text: "剩餘",
+            text: "剩余",
             font: { size: compact ? 14 : 12, weight: "regular" },
             textColor: COLORS.secondary,
           },
@@ -1017,7 +1064,7 @@ function resetRow(data) {
       },
       {
         type: "text",
-        text: `${data.daysRemaining} 天後`,
+        text: `${data.daysRemaining} 天后`,
         font: { size: 12, weight: "regular" },
         textColor: COLORS.secondary,
       },
@@ -1097,7 +1144,7 @@ function smallWidget(ctx, data) {
       },
       {
         type: "text",
-        text: `/ ${data.limitText} · 剩餘 ${data.remainingText}`,
+        text: `/ ${data.limitText} · 剩余 ${data.remainingText}`,
         font: { size: 12, weight: "regular" },
         textColor: COLORS.secondary,
         maxLines: 1,
@@ -1107,7 +1154,7 @@ function smallWidget(ctx, data) {
       { type: "spacer" },
       {
         type: "text",
-        text: data.resetDate ? `下次重置 ${data.resetDate}` : "下次重置以官網為準",
+        text: data.resetDate ? `下次重置 ${data.resetDate}` : "下次重置以官网为准",
         font: { size: 11, weight: "medium" },
         textColor: COLORS.secondary,
         maxLines: 1,
@@ -1195,7 +1242,7 @@ function errorWidget(ctx, message) {
       { type: "spacer" },
       {
         type: "text",
-        text: "輕點開啟 DMIT",
+        text: "轻点打开 DMIT",
         font: { size: 12, weight: "semibold" },
         textColor: COLORS.blue,
       },
@@ -1223,5 +1270,5 @@ export default async function main(ctx) {
     data = ctx.storage.getJSON(STORAGE.cache);
     if (!data) return errorWidget(ctx, problem.message);
   }
-  return renderTraffic(ctx, data);
+  return renderTraffic(ctx, normalizeDisplayData(data));
 }
