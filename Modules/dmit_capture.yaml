@@ -1,4 +1,5 @@
 name: "DMIT Cookie 抓取"
+author: "Codex"
 icon: "key.fill"
 open_url: "https://www.dmit.io/clientarea.php"
 
@@ -9,7 +10,7 @@ mitm:
 scriptings:
   - http_request:
       name: "dmit-cookie-capture"
-      match: '^https://www\.dmit\.io/(?:clientarea\.php|clientarea(?:/|$))'
+      match: '^https://www\.dmit\.io/(?:clientarea(?:\.php|/|(?:\?|$))|index\.php\?[^#]*rp=(?:%2F|/)client-area(?:%2F|/|&|$))'
       script_url: "https://raw.githubusercontent.com/lamchey/Egern/refs/heads/main/Modules/dmit_capture.js"
       timeout: 10
       body_required: false
