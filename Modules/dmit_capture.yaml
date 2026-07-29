@@ -1,0 +1,47 @@
+name: "DMIT 流量抓包"
+description: "负责捕获 DMIT VPS 流量接口、保存本机会话并每 30 分钟刷新缓存；不包含 Widget。"
+author: "Codex"
+icon: "network"
+open_url: "https://www.dmit.io/clientarea.php"
+
+env_schema:
+  DMIT_SERVICE_FILTER:
+    name: "实例筛选（可选）"
+    description: "多台 VPS 时填写服务 ID、产品名或主机名中的唯一片段；留空表示保存最近访问的实例。"
+  DMIT_NUMERIC_UNIT:
+    name: "纯数字字段单位"
+    description: "通常保持 auto；若缓存数值明显不对，再选择接口纯数字字段采用的单位。"
+    default_value: "auto"
+    options:
+      - auto
+      - bytes
+      - MB
+      - GB
+      - TB
+  DMIT_BILLING_MODE:
+    name: "流量计费方式"
+    description: "仅在接口只返回入站/出站而没有已用总量时生效。"
+    default_value: "max"
+    options:
+      - max
+      - sum
+
+mitm:
+  hostnames:
+    - "dmit.io"
+    - "*.dmit.io"
+
+scriptings:
+  - http_response:
+      name: "dmit-traffic-capture"
+      match: '^https://(?:[^/]+\.)?dmit\.io/'
+      script_url: "https://raw.githubusercontent.com/lamchey/Egern/refs/heads/main/Modules/dmit_capture.js"
+      timeout: 20
+      body_required: true
+      max_size: 3145728
+  - schedule:
+      name: "dmit-traffic-refresh"
+      cron: "*/30 * * * *"
+      script_url: "https://raw.githubusercontent.com/lamchey/Egern/refs/heads/main/Modules/dmit_capture.js"
+      timeout: 20
+
