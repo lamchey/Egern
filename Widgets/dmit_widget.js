@@ -7,6 +7,10 @@ const STORAGE = {
 const DMIT = {
   origin: "https://www.dmit.io",
   servicesUrl: "https://www.dmit.io/clientarea.php?action=services",
+  productsUrl: "https://www.dmit.io/clientarea.php?action=products",
+  hostingUrl: "https://www.dmit.io/clientarea.php?action=hosting",
+  friendlyServicesUrl: "https://www.dmit.io/index.php?rp=/client-area/services",
+  clientareaServicesUrl: "https://www.dmit.io/clientarea/services",
   dashboardUrl: "https://www.dmit.io/clientarea.php",
   userAgent:
     "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) " +
@@ -559,24 +563,205 @@ async function requestDmit(ctx, url, cookie, referer = DMIT.dashboardUrl) {
   throw new Error("DMIT 頁面跳轉次數過多");
 }
 
-function productLinks(html) {
-  const links = [];
-  const source = decodeHtmlEntities(String(html || ""));
-  const patterns = [
-    /href=["']([^"']*clientarea\.php\?action=productdetails&id=\d+[^"']*)["']/gi,
-    /href=["']([^"']*\/clientarea\/services\/\d+[^"']*)["']/gi,
-  ];
-  for (const pattern of patterns) {
-    for (const match of source.matchAll(pattern)) {
+function embeddedJsonDocuments(html) {
+  const documents = [];
+  const source = String(html || "").trim();
+  const bodies = [source];
+  for (const match of source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
+    bodies.push(decodeHtmlEntities(match[1]).trim());
+  }
+
+  for (const body of bodies) {
+    if (!body) continue;
+    const candidates = [body];
+    const objectStart = body.indexOf("{");
+    const objectEnd = body.lastIndexOf("}");
+    if (objectStart >= 0 && objectEnd > objectStart) {
+      candidates.push(body.slice(objectStart, objectEnd + 1));
+    }
+    const arrayStart = body.indexOf("[");
+    const arrayEnd = body.lastIndexOf("]");
+    if (arrayStart >= 0 && arrayEnd > arrayStart) {
+      candidates.push(body.slice(arrayStart, arrayEnd + 1));
+    }
+    for (const candidate of candidates) {
       try {
-        const url = toDmitUrl(match[1], DMIT.origin);
-        if (!links.includes(url)) links.push(url);
+        const parsed = JSON.parse(candidate);
+        documents.push(parsed);
+        break;
       } catch (_) {
-        // Ignore malformed or non-DMIT links.
+        // Try the next JSON-shaped candidate.
       }
     }
   }
-  return links;
+  return documents;
+}
+
+function serviceIdsFromJson(html) {
+  const ids = new Set();
+  const seen = new Set();
+
+  function visit(value, path, depth) {
+    if (!value || typeof value !== "object" || depth > 12 || seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (let index = 0; index < Math.min(value.length, 100); index += 1) {
+        visit(value[index], `${path}[${index}]`, depth + 1);
+      }
+      return;
+    }
+
+    const entries = primitiveEntries(value);
+    const explicit = pick(entries, /^(?:service_id|serviceid|hosting_id|hostingid)$/);
+    const genericId = pick(entries, /^id$/);
+    const keys = entries.map((entry) => entry.normalized).join("_");
+    const pathLooksLikeService = /(?:^|\.)(?:services?|hostings?)(?:\[|\.|$)/i.test(path);
+    const hasServiceTraits = /(?:product|package|domain|hostname|billing|next_due|status)/.test(keys);
+    const candidate = explicit || (pathLooksLikeService && hasServiceTraits ? genericId : null);
+    if (candidate && /^\d+$/.test(String(candidate.value))) {
+      ids.add(String(candidate.value));
+    }
+
+    for (const [key, child] of Object.entries(value)) {
+      visit(child, `${path}.${key}`, depth + 1);
+    }
+  }
+
+  for (const document of embeddedJsonDocuments(html)) visit(document, "$", 0);
+  return [...ids];
+}
+
+function productLinks(html) {
+  const source = decodeHtmlEntities(String(html || ""))
+    .replace(/\\u0026/gi, "&")
+    .replace(/\\u003d/gi, "=")
+    .replace(/\\u002f/gi, "/")
+    .replace(/\\\//g, "/")
+    .replace(/%26/gi, "&")
+    .replace(/%3d/gi, "=");
+  const byServiceId = new Map();
+  const candidates = [];
+
+  for (const match of source.matchAll(
+    /href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi,
+  )) {
+    candidates.push(match[1] || match[2] || match[3]);
+  }
+  for (const match of source.matchAll(
+    /(?:https?:\/\/www\.dmit\.io)?\/?(?:clientarea\.php\?[^"'<>\\\s]+|clientarea\/services\/\d+|index\.php\?rp=\/client-area\/services\/\d+)/gi,
+  )) {
+    candidates.push(match[0]);
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const url = new URL(candidate, DMIT.origin);
+      if (!isDmitUrl(url.href)) continue;
+      let serviceId = null;
+      if (url.searchParams.get("action") === "productdetails") {
+        serviceId = url.searchParams.get("id");
+      }
+      const routeMatch = url.pathname.match(/\/clientarea\/services\/(\d+)(?:\/|$)/i);
+      const rpMatch = url.searchParams.get("rp")?.match(/\/client-area\/services\/(\d+)(?:\/|$)/i);
+      serviceId = serviceId || (routeMatch && routeMatch[1]) || (rpMatch && rpMatch[1]);
+      if (/^\d+$/.test(serviceId || "")) {
+        byServiceId.set(
+          serviceId,
+          `${DMIT.origin}/clientarea.php?action=productdetails&id=${serviceId}`,
+        );
+      }
+    } catch (_) {
+      // Ignore malformed or non-DMIT links.
+    }
+  }
+
+  // Current WHMCS themes identify a service row with data attributes, while
+  // the product-details URL may live in onclick instead of an anchor href.
+  for (const match of source.matchAll(/<[^>]+\bdata-(?:type|element-id)\b[^>]*>/gi)) {
+    const tag = match[0];
+    if (!/\bdata-type\s*=\s*(?:"service"|'service'|service)(?:\s|\/?>)/i.test(tag)) {
+      continue;
+    }
+    const idMatch = tag.match(
+      /\bdata-element-id\s*=\s*(?:"(\d+)"|'(\d+)'|(\d+))/i,
+    );
+    const serviceId = idMatch && (idMatch[1] || idMatch[2] || idMatch[3]);
+    if (/^\d+$/.test(serviceId || "")) {
+      byServiceId.set(
+        serviceId,
+        `${DMIT.origin}/clientarea.php?action=productdetails&id=${serviceId}`,
+      );
+    }
+  }
+
+  // Some custom templates submit the service ID through a product-details form.
+  for (const match of source.matchAll(/<form\b([^>]*)>([\s\S]*?)<\/form>/gi)) {
+    const formAttributes = match[1];
+    const actionMatch = formAttributes.match(
+      /\baction\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i,
+    );
+    if (!actionMatch) continue;
+    try {
+      const actionUrl = new URL(
+        actionMatch[1] || actionMatch[2] || actionMatch[3],
+        DMIT.origin,
+      );
+      if (
+        !isDmitUrl(actionUrl.href) ||
+        actionUrl.searchParams.get("action") !== "productdetails"
+      ) {
+        continue;
+      }
+      let serviceId = actionUrl.searchParams.get("id");
+      if (!/^\d+$/.test(serviceId || "")) {
+        for (const inputMatch of match[2].matchAll(/<input\b[^>]*>/gi)) {
+          const input = inputMatch[0];
+          if (!/\bname\s*=\s*(?:"id"|'id'|id)(?:\s|\/?>)/i.test(input)) continue;
+          const valueMatch = input.match(
+            /\bvalue\s*=\s*(?:"(\d+)"|'(\d+)'|(\d+))/i,
+          );
+          serviceId =
+            valueMatch && (valueMatch[1] || valueMatch[2] || valueMatch[3]);
+          if (serviceId) break;
+        }
+      }
+      if (/^\d+$/.test(serviceId || "")) {
+        byServiceId.set(
+          serviceId,
+          `${DMIT.origin}/clientarea.php?action=productdetails&id=${serviceId}`,
+        );
+      }
+    } catch (_) {
+      // Ignore malformed form actions.
+    }
+  }
+
+  const idPatterns = [
+    /data-service-id\s*=\s*["']?(\d+)["']?/gi,
+    /name\s*=\s*["']serviceid["'][^>]*value\s*=\s*["']?(\d+)["']?/gi,
+    /value\s*=\s*["']?(\d+)["']?[^>]*name\s*=\s*["']serviceid["']/gi,
+    /["']?(?:serviceId|service_id|serviceid|hostingId|hosting_id)["']?\s*[:=]\s*["']?(\d+)["']?/gi,
+  ];
+  for (const pattern of idPatterns) {
+    for (const match of source.matchAll(pattern)) {
+      try {
+        const serviceId = match[1];
+        byServiceId.set(
+          serviceId,
+          `${DMIT.origin}/clientarea.php?action=productdetails&id=${serviceId}`,
+        );
+      } catch (_) {
+        // Ignore malformed service identifiers.
+      }
+    }
+  }
+  for (const serviceId of serviceIdsFromJson(source)) {
+    byServiceId.set(
+      serviceId,
+      `${DMIT.origin}/clientarea.php?action=productdetails&id=${serviceId}`,
+    );
+  }
+  return [...byServiceId.values()];
 }
 
 async function resolveProductUrl(ctx, cookie) {
@@ -586,7 +771,15 @@ async function resolveProductUrl(ctx, cookie) {
     return `${DMIT.origin}/clientarea.php?action=productdetails&id=${serviceId}`;
   }
 
-  for (const indexUrl of [DMIT.servicesUrl, DMIT.dashboardUrl]) {
+  const indexUrls = [
+    DMIT.servicesUrl,
+    DMIT.productsUrl,
+    DMIT.hostingUrl,
+    DMIT.friendlyServicesUrl,
+    DMIT.clientareaServicesUrl,
+    DMIT.dashboardUrl,
+  ];
+  for (const indexUrl of indexUrls) {
     const html = await requestDmit(ctx, indexUrl, cookie);
     const links = productLinks(html);
     if (links.length === 1) return links[0];
@@ -598,7 +791,7 @@ async function resolveProductUrl(ctx, cookie) {
     if (traffic) return indexUrl;
   }
 
-  throw new Error("未找到 VPS；多台服務時請在腳本 Env 設定 DMIT_SERVICE_ID");
+  throw new Error("未找到 VPS 服務 ID；請在腳本 Env 設定 DMIT_SERVICE_ID");
 }
 
 async function loadTraffic(ctx) {
